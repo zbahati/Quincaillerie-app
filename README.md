@@ -89,3 +89,5 @@ Global response headers include CSP, frame protection, MIME sniffing protection,
 Use `docker compose -p quincaillerie-web-dev down` to stop the stack while preserving the database volume. Do not remove the volume unless you intend to delete the local database. Stop the host `npm run dev` server before starting the Compose web service on the same host port. The Docker image uses Next.js standalone output and runs as a non-root user; production secrets and deployment settings are not included in this development Compose file.
 
 The production Docker image includes a database-aware `/api/health` check. It returns HTTP 200 only when PostgreSQL is reachable and HTTP 503 otherwise. See [DEPLOYMENT.md](./DEPLOYMENT.md) for staging, HTTPS, migration, backup, restore, monitoring and rollback guidance.
+#   Q u i n c a i l l e r i e - a p p  
+ 
