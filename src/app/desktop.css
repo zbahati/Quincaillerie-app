@@ -1,0 +1,562 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  font-family: "Inter Variable", Inter, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+
+  --background: oklch(0.975 0.008 250);
+  --foreground: oklch(0.22 0.025 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.025 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.025 255);
+  --primary: oklch(0.36 0.075 250);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.012 250);
+  --secondary-foreground: oklch(0.3 0.035 250);
+  --muted: oklch(0.95 0.008 250);
+  --muted-foreground: oklch(0.47 0.025 255);
+  --accent: oklch(0.94 0.04 78);
+  --accent-foreground: oklch(0.32 0.06 55);
+  --destructive: oklch(0.55 0.19 25);
+  --border: oklch(0.88 0.012 250);
+  --input: oklch(0.85 0.016 250);
+  --ring: oklch(0.55 0.08 245);
+  --chart-1: oklch(0.47 0.09 245);
+  --chart-2: oklch(0.65 0.1 75);
+  --chart-3: oklch(0.56 0.09 165);
+  --chart-4: oklch(0.63 0.12 35);
+  --chart-5: oklch(0.55 0.07 300);
+  --radius: 0.55rem;
+  --sidebar: oklch(0.23 0.035 250);
+  --sidebar-foreground: oklch(0.95 0.008 250);
+  --sidebar-primary: oklch(0.78 0.14 78);
+  --sidebar-primary-foreground: oklch(0.22 0.04 250);
+  --sidebar-accent: oklch(0.31 0.04 250);
+  --sidebar-accent-foreground: oklch(0.98 0.005 250);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.78 0.14 78);
+
+  --space-page: clamp(1.25rem, 2.2vw, 2rem);
+  --shadow-panel: 0 1px 2px oklch(0.22 0.025 255 / 5%);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-width: 360px;
+  margin: 0;
+}
+
+body {
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Inter Variable", Inter, "Segoe UI", sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.65);
+  --radius-md: calc(var(--radius) * 0.85);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.25);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.18 0.02 255);
+  --foreground: oklch(0.94 0.008 250);
+  --card: oklch(0.22 0.022 255);
+  --card-foreground: oklch(0.94 0.008 250);
+  --popover: oklch(0.22 0.022 255);
+  --popover-foreground: oklch(0.94 0.008 250);
+  --primary: oklch(0.72 0.08 245);
+  --primary-foreground: oklch(0.18 0.02 255);
+  --secondary: oklch(0.27 0.02 255);
+  --secondary-foreground: oklch(0.91 0.01 250);
+  --muted: oklch(0.27 0.02 255);
+  --muted-foreground: oklch(0.7 0.02 250);
+  --accent: oklch(0.31 0.035 75);
+  --accent-foreground: oklch(0.88 0.045 75);
+  --destructive: oklch(0.68 0.17 25);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.68 0.07 245);
+  --sidebar: oklch(0.19 0.025 250);
+  --sidebar-foreground: oklch(0.92 0.01 250);
+  --sidebar-primary: oklch(0.78 0.14 78);
+  --sidebar-primary-foreground: oklch(0.18 0.02 255);
+  --sidebar-accent: oklch(0.27 0.03 250);
+  --sidebar-accent-foreground: oklch(0.95 0.008 250);
+  --sidebar-border: oklch(1 0 0 / 11%);
+  --sidebar-ring: oklch(0.68 0.07 245);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-variant-numeric: tabular-nums;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .page-content {
+    width: 100%;
+    min-width: 0;
+    max-width: 1600px;
+    margin-inline: auto;
+    padding: var(--space-page);
+  }
+
+  .page-content > * {
+    min-width: 0;
+  }
+
+  .page-title {
+    font-size: 1.7rem;
+    font-weight: 650;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+  }
+
+  .data-number {
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-slot="table-container"] {
+    scrollbar-color: oklch(0.72 0.015 250) transparent;
+    scrollbar-width: thin;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
+
+  .print-report-actions,
+  .print-report-page > .print-report-error,
+  .print-report-page > .print-report-loading {
+    display: none !important;
+  }
+
+  .daily-report {
+    padding: 0;
+  }
+
+  .page-content {
+    max-width: none;
+    padding: 0;
+  }
+
+  .report-paper {
+    max-width: none;
+  }
+
+  .report-paper > * {
+    break-inside: avoid;
+  }
+
+  .report-paper table {
+    break-inside: auto;
+  }
+
+  .report-paper tr {
+    break-inside: avoid;
+  }
+
+  .print-report-page {
+    min-width: 0;
+    background: white;
+  }
+
+  .print-report-document {
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+}
+
+.print-report-page {
+  min-height: 100vh;
+  background: #eef1f5;
+  padding: 2rem 1rem 4rem;
+}
+
+.print-report-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  max-width: 980px;
+  margin: 0 auto 1rem;
+}
+
+.print-report-document {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 3rem;
+  background: white;
+  color: #172033;
+  box-shadow: 0 12px 35px rgb(15 23 42 / 12%);
+  font-family: "Inter Variable", Inter, "Segoe UI", sans-serif;
+}
+
+.print-report-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 4px solid #1e3a5f;
+}
+
+.print-report-header h1 {
+  margin: 0.25rem 0;
+  font-size: 2rem;
+  letter-spacing: -0.035em;
+}
+
+.print-report-header p {
+  margin: 0;
+  color: #586579;
+  font-size: 0.85rem;
+}
+
+.print-report-kicker {
+  color: #1e3a5f !important;
+  font-size: 0.7rem !important;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.print-report-meta {
+  display: flex;
+  min-width: 10rem;
+  flex-direction: column;
+  justify-content: center;
+  text-align: right;
+}
+
+.print-report-meta span,
+.print-report-summary span,
+.print-report-summary small {
+  color: #586579;
+  font-size: 0.72rem;
+}
+
+.print-report-meta strong {
+  margin-top: 0.25rem;
+  font-size: 0.95rem;
+}
+
+.print-report-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+.print-report-summary > div {
+  min-height: 7rem;
+  padding: 1rem;
+  border: 1px solid #d8dee8;
+  border-top: 3px solid #1e3a5f;
+}
+
+.print-report-summary strong {
+  display: block;
+  margin: 0.45rem 0;
+  font-size: 1.2rem;
+}
+
+.print-report-summary small {
+  display: block;
+}
+
+.print-report-summary .is-positive {
+  border-top-color: #16835b;
+}
+
+.print-report-summary .is-negative {
+  border-top-color: #bd3b3b;
+}
+
+.print-report-section {
+  margin-top: 1.5rem;
+}
+
+.print-report-section h2 {
+  margin: 0 0 0.35rem;
+  color: #1e3a5f;
+  font-size: 1rem;
+}
+
+.print-report-section p {
+  margin: 0;
+  color: #465469;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.print-report-note {
+  margin-bottom: 0.65rem !important;
+  color: #6b778a !important;
+  font-size: 0.72rem !important;
+}
+
+.print-report-columns {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2rem;
+}
+
+.print-report-table {
+  width: 100%;
+  margin-top: 0.65rem;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.print-report-table tr {
+  border-bottom: 1px solid #e3e7ed;
+}
+
+.print-report-table td {
+  padding: 0.5rem 0;
+}
+
+.print-report-table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.print-report-total {
+  display: flex !important;
+  justify-content: space-between;
+  margin-top: 0.75rem !important;
+  padding-top: 0.65rem;
+  border-top: 2px solid #1e3a5f;
+  color: #172033 !important;
+  font-weight: 700;
+}
+
+.print-report-total-emphasis {
+  font-size: 1rem !important;
+}
+
+.print-report-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #d8dee8;
+  color: #6b778a;
+  font-size: 0.68rem;
+}
+
+.print-report-error,
+.print-report-loading {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+}
+
+.cashbook-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 3px solid #1e3a5f;
+}
+
+.cashbook-header h1 {
+  margin: 0.25rem 0;
+  font-size: 2rem;
+  letter-spacing: -0.035em;
+}
+
+.cashbook-header p {
+  margin: 0;
+  color: #586579;
+  font-size: 0.82rem;
+}
+
+.cashbook-ledger {
+  margin-top: 1.5rem;
+}
+
+.cashbook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.cashbook-table th {
+  padding: 0.6rem 0.7rem;
+  background: #1e3a5f;
+  color: white;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.cashbook-table th:nth-child(2),
+.cashbook-table td:nth-child(2) {
+  text-align: right;
+}
+
+.cashbook-table th:last-child,
+.cashbook-table td:last-child {
+  text-align: right;
+}
+
+.cashbook-table td {
+  padding: 0.48rem 0.7rem;
+  border-bottom: 1px solid #e1e6ed;
+  vertical-align: top;
+}
+
+.cashbook-table td:first-child {
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.cashbook-table td:nth-child(2) {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cashbook-table td:last-child {
+  color: #586579;
+  font-size: 0.72rem;
+}
+
+.cashbook-table tr.is-emphasis td {
+  background: #f1f4f8;
+  font-weight: 750;
+}
+
+.cashbook-table tr.is-section td {
+  padding-top: 0.9rem;
+  border-bottom-color: #9daabd;
+  color: #1e3a5f;
+}
+
+.cashbook-status {
+  margin-top: 1.25rem;
+  padding: 0.9rem 1rem;
+  border-left: 4px solid #16835b;
+  background: #f1f8f5;
+  color: #244238;
+  font-size: 0.75rem;
+}
+
+.cashbook-status.is-unbalanced {
+  border-left-color: #bd3b3b;
+  background: #fff5f5;
+  color: #642b2b;
+}
+
+.cashbook-status p {
+  margin: 0.3rem 0 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .print-report-document {
+    padding: 1.5rem;
+  }
+
+  .print-report-header,
+  .cashbook-header,
+  .print-report-columns {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .print-report-meta {
+    text-align: left;
+  }
+
+  .print-report-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
