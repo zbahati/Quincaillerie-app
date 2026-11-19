@@ -1,6 +1,6 @@
 # Quincaillerie Manager — Web/PWA Migration Guide
 
-**Status:** Tasks 2.1-2.5, 3.1-3.3, and Tasks 6.1-6.19 implementation and automated validation are complete. Authenticated browser verification includes the Admin business-data export and the adapted Purchases/Purchase History routes. Phase 7.1 validation and Task 7.5 reconciliation review are complete; the Phase 7.2 visual route sweep, Phase 7.3 PWA shell/offline fallback checks, and Task 7.4 security-header review are complete. Phase 8 deployment-readiness documentation and local container validation are complete; no staging provider, production migration or publication was created. Task 2.4 still lacks some feature-module adapters; Employees, Settings, Products, Inventory, Suppliers, Customers, Purchases, Purchase History, POS, Sales History, customer debt/payments, Expenses, Cash Accounts, confirmed transfers, daily reports and financial statements are adapted, while other feature screens remain gated where they call Tauri. Offline device enrollment and POS synchronization remain later work.
+**Status:** Tasks 2.1-2.5, 3.1-3.3, and Tasks 6.1-6.19 implementation and automated validation are complete. Authenticated browser verification includes the Admin business-data export and the adapted Purchases/Purchase History routes. Phase 7.1 validation and Task 7.5 reconciliation review are complete; the Phase 7.2 visual route sweep, Phase 7.3 PWA shell/offline fallback checks, and Task 7.4 security-header review are complete. Phase 8 deployment-readiness documentation and local container validation are complete. Render is selected for the web service and Neon for PostgreSQL; no staging resources or production migration/publication have been created. Task 2.4 still lacks some feature-module adapters; Employees, Settings, Products, Inventory, Suppliers, Customers, Purchases, Purchase History, POS, Sales History, customer debt/payments, Expenses, Cash Accounts, confirmed transfers, daily reports and financial statements are adapted, while other feature screens remain gated where they call Tauri. Offline device enrollment and POS synchronization remain later work.
 **Audited:** 2026-11-19  
 **Desktop source:** `../inventory-app-kivu/`  
 **Goal:** Build a separate, scalable Next.js web application that closely reproduces the existing desktop application's screens, workflows, business rules, and offline usability.
@@ -189,7 +189,7 @@ The user approved the following on 2026-11-17:
 - **Offline writes:** POS is the initial offline write workflow, alongside appropriately labeled cached reads. Keep purchases, receiving, inventory corrections, expenses, customer repayments, supplier payments, transfers and other cash-management writes online-only initially. POS behavior remains pending sync until server confirmation.
 - **Conflict handling:** Queue and mark offline operations pending; surface stock/cash conflicts for manager review. Never silently present queued work as server-confirmed.
 - **Database migration:** Start the web dataset fresh; do not import desktop SQLite business records.
-- **Hosting provider:** Undecided. Use local Docker Compose/PostgreSQL for development; hosting selection remains a deployment decision.
+- **Hosting provider:** Render is selected for the Docker-based web service and Neon for hosted PostgreSQL. Use local Docker Compose/PostgreSQL for development. The user selected free-tier plans; staging resource creation remains pending.
 
 The user delegated selection of offline workflows to the implementation. POS is selected as the most valuable first offline write path, but its detailed tender rules, cache freshness, local provisional stock handling and reconciliation behavior must be specified and tested before Phase 4 is implemented.
 
@@ -256,9 +256,9 @@ Each numbered task is a separate checkpoint. At the end of one task: summarize t
 
 **Task 0.1 — Done:** User chose the hosted Next.js PWA only; existing Tauri desktop remains untouched, with no second Tauri wrapper.  
 **Task 0.2 — Baseline decided:** User approved online first sign-in/device enrollment, prior sign-in on an approved device for offline use, POS as the initial offline write path, and manager review for sync conflicts. Detailed offline POS tender/stock reconciliation rules remain a Phase 4 prerequisite.  
-**Task 0.3 — Partly decided:** User chose a fresh web dataset with no SQLite import. Hosting provider remains undecided; use local Docker Compose/PostgreSQL for development and select hosting before deployment.
+**Task 0.3 — Decided:** User chose a fresh web dataset with no SQLite import, Render for the Docker-based web service, and Neon for hosted PostgreSQL. Use local Docker Compose/PostgreSQL for development. The user selected free-tier plans; staging resources have not been created.
 
-**Gate status:** Product boundary, initial offline policy, and branch-manager cardinality are recorded; no further Phase 0 question blocks the source audit. Do not select a hosted provider, move data or deploy without later approval.
+**Gate status:** Product boundary, initial offline policy, branch-manager cardinality, and hosting providers are recorded. Do not provision staging resources, incur hosting costs, migrate production data, or publish without explicit approval.
 
 ### Phase 1 — Screen-by-screen parity audit and reference capture
 
@@ -346,7 +346,9 @@ This ordering is a proposal, not a claim that one module is independent of anoth
 
 ### Phase 8 — Deployment readiness (separate approval)
 
-Document Docker production build, hosting/network requirements, HTTPS, environment variables, database migrations, backups, restore drills, monitoring, retention and rollback. Validate using a staging deployment before production. Do not publish, migrate production data, or incur hosting costs without explicit user approval.
+Use a Render Docker Web Service with Neon PostgreSQL for staging. Configure HTTPS, environment variables, database migrations, backups, restore drills, monitoring, retention and rollback, then validate the deployment before production. The user selected free-tier plans, but staging resources have not been created; do not upgrade plans or incur charges without explicit user approval. Do not publish or migrate production data without explicit approval.
+
+The selected initial configuration is the Render free web-service plan and Neon free plan. `render.yaml` defines the Docker service in Ohio to match the Neon project region and deploys on each commit to the branch selected when creating the Blueprint. `DATABASE_URL`, `WEB_BASE_URL`, `RESEND_API_KEY`, and `RESEND_FROM_EMAIL` are entered as unsynchronized environment values rather than committed. The Docker image applies pending migrations before launching Next.js, including on Render's free plan, which does not support pre-deploy commands; the runner uses a PostgreSQL advisory lock and checksum tracking. Use the Neon pooled SSL connection string and set `WEB_BASE_URL` to the exact deployed HTTPS origin. Free services can sleep and cold-start, so this is for staging/evaluation, not production reliability. No external resources have been created.
 
 ## 6. Non-negotiable business and safety rules
 
