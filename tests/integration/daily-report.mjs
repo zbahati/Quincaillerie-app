@@ -26,6 +26,7 @@ test("daily report calculates branch sales, expenses, cash movements and custome
   let businessId;
   let branchId;
   let accountId;
+  let bankAccountId;
 
   try {
     await withTransaction(async (client) => {
@@ -49,11 +50,25 @@ test("daily report calculates branch sales, expenses, cash movements and custome
         [businessId, branchId, admin.id],
       );
       accountId = account.rows[0].id;
+      const bankAccount = await client.query(
+        `INSERT INTO cash_accounts
+           (business_id, branch_id, account_type, name, responsible_user_id)
+         VALUES ($1, $2, 'bank', 'Main bank', $3)
+         RETURNING id`,
+        [businessId, branchId, admin.id],
+      );
+      bankAccountId = bankAccount.rows[0].id;
       await client.query(
         `INSERT INTO cash_account_openings
            (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
          VALUES ($1, $2, 100000, $3, $3)`,
         [businessId, accountId, admin.id],
+      );
+      await client.query(
+        `INSERT INTO cash_account_openings
+           (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
+         VALUES ($1, $2, 500000, $3, $3)`,
+        [businessId, bankAccountId, admin.id],
       );
       await client.query(
         `INSERT INTO sales
@@ -76,13 +91,25 @@ test("daily report calculates branch sales, expenses, cash movements and custome
                  gen_random_uuid(), $3, 'Monthly rent')`,
         [businessId, accountId, admin.id],
       );
+      await client.query(
+        `INSERT INTO cash_movements
+           (business_id, account_id, movement_type, direction, amount, source_type, description)
+         VALUES
+           ($1, $2, 'other_receipt', 'in', 12000, 'other', 'Cash drawer receipt'),
+           ($1, $3, 'other_receipt', 'in', 40000, 'other', 'Bank receipt'),
+           ($1, $3, 'other_payment', 'out', 10000, 'other', 'Bank payment')`,
+        [businessId, accountId, bankAccountId],
+      );
     });
 
     const report = await calculateDailyReport(pool, businessId, branchId, date, date);
     assert.equal(report.branchName, "Report Main");
     assert.equal(report.expensesTotal, 25000);
     assert.equal(report.salesTotal, 24000);
-    assert.equal(report.calculatedPhysicalCash, 75000);
+    assert.equal(report.openingPhysicalCash, 100000);
+    assert.equal(report.cashInflow, 12000);
+    assert.equal(report.cashOutflow, 25000);
+    assert.equal(report.calculatedPhysicalCash, 87000);
   } finally {
     if (businessId) {
       await pool.query("DELETE FROM cash_movements WHERE business_id = $1", [businessId]);

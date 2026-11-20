@@ -100,7 +100,7 @@ export function ReportsPage() {
           </section>
           <div className="grid gap-6 xl:grid-cols-2">
             <Card>
-              <CardHeader><CardTitle>Cash reconciliation</CardTitle><CardDescription>Opening, movements and calculated physical closing cash.</CardDescription></CardHeader>
+              <CardHeader><CardTitle>Cash reconciliation</CardTitle><CardDescription>Cash drawer opening, movements and calculated physical closing cash.</CardDescription></CardHeader>
               <CardContent>
                 <table className="w-full text-sm"><tbody>
                   <tr className="border-b"><td className="py-2">Opening physical cash</td><td className="py-2 text-right font-medium">{formatMoney(report.opening_physical_cash)}</td></tr>

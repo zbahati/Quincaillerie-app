@@ -207,7 +207,8 @@ export async function calculateDailyReport(
     `SELECT COALESCE(SUM(o.opening_amount), 0)::text AS amount
      FROM cash_account_openings o
      JOIN cash_accounts ca ON ca.id = o.account_id AND ca.business_id = o.business_id
-     WHERE o.business_id = $1 AND ca.branch_id = $2`,
+     WHERE o.business_id = $1 AND ca.branch_id = $2
+       AND ca.account_type = 'cash_drawer'`,
     [businessId, branchId],
   );
   const openingCash = safeInteger(openingCashRow.rows[0]?.amount ?? "0", "opening cash");
@@ -217,6 +218,7 @@ export async function calculateDailyReport(
      JOIN cash_accounts ca ON ca.id = cm.account_id AND ca.business_id = cm.business_id
      WHERE cm.business_id = $1
        AND ca.branch_id = $2
+       AND ca.account_type = 'cash_drawer'
        AND cm.recorded_at::date >= $3::date
        AND cm.recorded_at::date <= $4::date
      GROUP BY direction`,

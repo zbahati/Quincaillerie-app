@@ -312,8 +312,8 @@ test("customer statements reconcile sale payments and later repayments", async (
       date,
     );
     assert.equal(dailyReport.customerRepayments, 6000);
-    assert.equal(dailyReport.cashInflow, 16000);
-    assert.equal(dailyReport.calculatedPhysicalCash, 36000);
+    assert.equal(dailyReport.cashInflow, 10000);
+    assert.equal(dailyReport.calculatedPhysicalCash, 30000);
 
     const balanceSheet = await calculateBalanceSheet(
       pool,

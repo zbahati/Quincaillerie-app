@@ -58,10 +58,10 @@ export function DailyReportPrintPage() {
           <table className="cashbook-table">
             <thead><tr><th>Description</th><th>Amount</th><th>Reference</th></tr></thead>
             <tbody>
-              <tr className="is-emphasis"><td>Opening physical cash</td><td>{formatMoney(report.opening_physical_cash)}</td><td>Cash ledger</td></tr>
-              <tr className="is-emphasis"><td>Period cash inflow</td><td>{formatMoney(report.cash_inflow)}</td><td>Verified movements</td></tr>
-              <tr className="is-emphasis"><td>Period cash outflow</td><td>{formatMoney(report.cash_outflow)}</td><td>Verified movements</td></tr>
-              <tr className="is-emphasis"><td>Calculated physical cash</td><td>{formatMoney(report.calculated_physical_cash)}</td><td>Opening + inflow - outflow</td></tr>
+              <tr className="is-emphasis"><td>Opening physical cash</td><td>{formatMoney(report.opening_physical_cash)}</td><td>Cash drawer ledger</td></tr>
+              <tr className="is-emphasis"><td>Period cash inflow</td><td>{formatMoney(report.cash_inflow)}</td><td>Cash drawer movements</td></tr>
+              <tr className="is-emphasis"><td>Period cash outflow</td><td>{formatMoney(report.cash_outflow)}</td><td>Cash drawer movements</td></tr>
+              <tr className="is-emphasis"><td>Calculated physical cash</td><td>{formatMoney(report.calculated_physical_cash)}</td><td>Opening + drawer inflow - drawer outflow</td></tr>
               <tr><td>Sales total</td><td>{formatMoney(report.sales_total)}</td><td>{report.sale_count} completed sales</td></tr>
               <tr><td>Collected at sale</td><td>{formatMoney(report.collected_at_sale)}</td><td>Sale payments</td></tr>
               <tr><td>Credit sales</td><td>{formatMoney(report.credit_sales)}</td><td>Customer debt</td></tr>
