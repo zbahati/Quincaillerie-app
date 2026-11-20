@@ -48,6 +48,11 @@ test("supplier and customer directories preserve tenant scope, permissions and c
     "Content-Type": "application/json",
   };
   let businessOneId;
+  let branchId;
+  let secondaryBranchId;
+  let businessTwoBranchId;
+  let legacySupplierId;
+  let legacyCustomerId;
   let adminOneToken;
   let managerToken;
   let adminTwoToken;
@@ -80,6 +85,9 @@ test("supplier and customer directories preserve tenant scope, permissions and c
         [businessOne.id, adminOne.id],
       );
       const branch = await createBranch(client, businessOne.id, { name: "Relationships branch" }, true);
+      branchId = branch.id;
+      const secondaryBranch = await createBranch(client, businessOne.id, { name: "Other relationships branch" }, true);
+      secondaryBranchId = secondaryBranch.id;
       const manager = await createManagerUser(client, {
         businessId: businessOne.id,
         branchId: branch.id,
@@ -106,6 +114,8 @@ test("supplier and customer directories preserve tenant scope, permissions and c
 
       const businessTwo = await createBusiness(client, { name: `Other relationships ${unique}` });
       businessIds.push(businessTwo.id);
+      const businessTwoBranch = await createBranch(client, businessTwo.id, { name: "Other business branch" }, true);
+      businessTwoBranchId = businessTwoBranch.id;
       const adminTwo = await createAdminUser(client, {
         businessId: businessTwo.id,
         username: `rel.other.${unique.slice(-8)}`,
@@ -147,6 +157,7 @@ test("supplier and customer directories preserve tenant scope, permissions and c
         method: "POST",
         body: JSON.stringify({
           businessId: "00000000-0000-4000-8000-000000000001",
+          branchId,
           name: "  Kigali Building Supplies  ",
           contactPerson: "  Aline  ",
           phone: "0788000000",
@@ -162,29 +173,49 @@ test("supplier and customer directories preserve tenant scope, permissions and c
     assert.equal(supplier.name, "Kigali Building Supplies");
     assert.equal(supplier.contact_person, "Aline");
     assert.equal(supplier.address, null);
+    await pool.query(
+      `INSERT INTO suppliers (business_id, branch_id, name)
+       VALUES ($1, $2, 'Secondary branch supplier')`,
+      [businessOneId, secondaryBranchId],
+    );
+    const legacySupplier = await pool.query(
+      `INSERT INTO suppliers (business_id, name)
+       VALUES ($1, 'Unassigned legacy supplier')
+       RETURNING id`,
+      [businessOneId],
+    );
+    legacySupplierId = legacySupplier.rows[0].id;
 
     const supplierListResponse = await getSuppliers(
-      authenticatedRequest("/api/suppliers", adminOneToken),
+      authenticatedRequest(`/api/suppliers?branchId=${branchId}`, adminOneToken),
     );
     assert.equal(supplierListResponse.status, 200);
     assert.equal((await supplierListResponse.json()).suppliers[0].id, supplier.id);
     assert.deepEqual(
-      (await (await getSuppliers(authenticatedRequest("/api/suppliers", adminTwoToken))).json()).suppliers,
+      (await (await getSuppliers(authenticatedRequest(`/api/suppliers?branchId=${businessTwoBranchId}`, adminTwoToken))).json()).suppliers,
       [],
     );
+    const secondarySupplierList = await getSuppliers(
+      authenticatedRequest(`/api/suppliers?branchId=${secondaryBranchId}`, adminOneToken),
+    );
+    assert.equal((await secondarySupplierList.json()).suppliers[0].name, "Secondary branch supplier");
 
     const readOnlySupplierList = await getSuppliers(
-      authenticatedRequest("/api/suppliers", managerToken),
+      authenticatedRequest(`/api/suppliers?branchId=${branchId}`, managerToken),
     );
     assert.equal(readOnlySupplierList.status, 200);
     assert.equal((await readOnlySupplierList.json()).suppliers.length, 1);
     const readOnlySupplierCreate = await postSupplier(
       authenticatedRequest("/api/suppliers", managerToken, {
         method: "POST",
-        body: JSON.stringify({ name: "Forbidden supplier" }),
+        body: JSON.stringify({ branchId, name: "Forbidden supplier" }),
       }),
     );
     assert.equal(readOnlySupplierCreate.status, 403);
+    assert.equal(
+      (await getSuppliers(authenticatedRequest(`/api/suppliers?branchId=${secondaryBranchId}`, managerToken))).status,
+      403,
+    );
 
     await pool.query(
       `UPDATE business_manager_permissions
@@ -196,6 +227,7 @@ test("supplier and customer directories preserve tenant scope, permissions and c
       authenticatedRequest(`/api/suppliers/${supplier.id}`, managerToken, {
         method: "PATCH",
         body: JSON.stringify({
+          branchId,
           name: "Kigali Building Supplies",
           contactPerson: null,
           phone: null,
@@ -209,11 +241,47 @@ test("supplier and customer directories preserve tenant scope, permissions and c
     );
     assert.equal(supplierUpdateResponse.status, 200);
     assert.equal((await supplierUpdateResponse.json()).supplier.is_active, false);
+    const managerLegacySupplierUpdate = await patchSupplier(
+      authenticatedRequest(`/api/suppliers/${legacySupplierId}`, managerToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          branchId,
+          name: "Unassigned legacy supplier",
+          contactPerson: null,
+          phone: null,
+          email: null,
+          address: null,
+          taxId: null,
+          isActive: true,
+        }),
+      }),
+      { params: Promise.resolve({ supplierId: legacySupplierId }) },
+    );
+    assert.equal(managerLegacySupplierUpdate.status, 404);
+    const adminLegacySupplierUpdate = await patchSupplier(
+      authenticatedRequest(`/api/suppliers/${legacySupplierId}`, adminOneToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          branchId,
+          name: "Assigned legacy supplier",
+          contactPerson: null,
+          phone: null,
+          email: null,
+          address: null,
+          taxId: null,
+          isActive: true,
+        }),
+      }),
+      { params: Promise.resolve({ supplierId: legacySupplierId }) },
+    );
+    assert.equal(adminLegacySupplierUpdate.status, 200);
+    assert.equal((await adminLegacySupplierUpdate.json()).supplier.branch_id, branchId);
 
     const customerCreateResponse = await postCustomer(
       authenticatedRequest("/api/customers", adminOneToken, {
         method: "POST",
         body: JSON.stringify({
+          branchId,
           name: "Aline Mukamana",
           phone: "0788111222",
           address: "Kigali",
@@ -227,21 +295,42 @@ test("supplier and customer directories preserve tenant scope, permissions and c
     assert.equal(customer.business_id, businessOneId);
     assert.equal(customer.credit_limit, 12345);
     assert.equal(customer.customer_type, "individual");
+    await pool.query(
+      `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+       VALUES ($1, $2, 'Secondary branch customer', 1000)`,
+      [businessOneId, secondaryBranchId],
+    );
+    const legacyCustomer = await pool.query(
+      `INSERT INTO customers (business_id, name, credit_limit)
+       VALUES ($1, 'Unassigned legacy customer', 1000)
+       RETURNING id`,
+      [businessOneId],
+    );
+    legacyCustomerId = legacyCustomer.rows[0].id;
 
     const customerListResponse = await getCustomers(
-      authenticatedRequest("/api/customers", adminOneToken),
+      authenticatedRequest(`/api/customers?branchId=${branchId}`, adminOneToken),
     );
     assert.equal(customerListResponse.status, 200);
     assert.equal((await customerListResponse.json()).customers[0].credit_limit, 12345);
     assert.deepEqual(
-      (await (await getCustomers(authenticatedRequest("/api/customers", adminTwoToken))).json()).customers,
+      (await (await getCustomers(authenticatedRequest(`/api/customers?branchId=${businessTwoBranchId}`, adminTwoToken))).json()).customers,
       [],
+    );
+    const secondaryCustomerList = await getCustomers(
+      authenticatedRequest(`/api/customers?branchId=${secondaryBranchId}`, adminOneToken),
+    );
+    assert.equal((await secondaryCustomerList.json()).customers[0].name, "Secondary branch customer");
+    assert.equal(
+      (await getCustomers(authenticatedRequest(`/api/customers?branchId=${secondaryBranchId}`, managerToken))).status,
+      403,
     );
 
     const invalidCustomerResponse = await postCustomer(
       authenticatedRequest("/api/customers", adminOneToken, {
         method: "POST",
         body: JSON.stringify({
+          branchId,
           name: "Invalid credit",
           customerType: "individual",
           creditLimit: -1,
@@ -254,6 +343,7 @@ test("supplier and customer directories preserve tenant scope, permissions and c
       authenticatedRequest(`/api/customers/${customer.id}`, managerToken, {
         method: "PATCH",
         body: JSON.stringify({
+          branchId,
           name: "Aline Mukamana",
           phone: "0788111222",
           address: "Kigali",
@@ -269,11 +359,45 @@ test("supplier and customer directories preserve tenant scope, permissions and c
     assert.equal(updatedCustomer.customer_type, "business");
     assert.equal(updatedCustomer.credit_limit, 67890);
     assert.equal(updatedCustomer.is_active, false);
+    const managerLegacyCustomerUpdate = await patchCustomer(
+      authenticatedRequest(`/api/customers/${legacyCustomerId}`, managerToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          branchId,
+          name: "Unassigned legacy customer",
+          phone: null,
+          address: null,
+          customerType: "individual",
+          creditLimit: 1000,
+          isActive: true,
+        }),
+      }),
+      { params: Promise.resolve({ customerId: legacyCustomerId }) },
+    );
+    assert.equal(managerLegacyCustomerUpdate.status, 404);
+    const adminLegacyCustomerUpdate = await patchCustomer(
+      authenticatedRequest(`/api/customers/${legacyCustomerId}`, adminOneToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          branchId,
+          name: "Assigned legacy customer",
+          phone: null,
+          address: null,
+          customerType: "individual",
+          creditLimit: 1000,
+          isActive: true,
+        }),
+      }),
+      { params: Promise.resolve({ customerId: legacyCustomerId }) },
+    );
+    assert.equal(adminLegacyCustomerUpdate.status, 200);
+    assert.equal((await adminLegacyCustomerUpdate.json()).customer.branch_id, branchId);
 
     const foreignCustomerUpdate = await patchCustomer(
       authenticatedRequest(`/api/customers/${customer.id}`, adminTwoToken, {
         method: "PATCH",
         body: JSON.stringify({
+          branchId,
           name: "Foreign edit",
           phone: null,
           address: null,
@@ -303,7 +427,9 @@ test("supplier and customer directories preserve tenant scope, permissions and c
       [
         "customers.customer_created",
         "customers.customer_updated",
+        "customers.customer_updated",
         "suppliers.supplier_created",
+        "suppliers.supplier_updated",
         "suppliers.supplier_updated",
       ],
     );
@@ -315,6 +441,8 @@ test("supplier and customer directories preserve tenant scope, permissions and c
       await pool.query("DELETE FROM audit_logs WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM business_manager_permissions WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM users WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM suppliers WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM customers WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM branches WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM businesses WHERE id = $1", [businessId]);
     }

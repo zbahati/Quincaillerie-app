@@ -41,8 +41,11 @@ test("customer statements reconcile sale payments and later repayments", async (
   const cookieName = authSessionCookieName();
   const originHeaders = { Origin: "http://localhost:3000", "Content-Type": "application/json" };
   let branchId;
+  let secondaryBranchId;
   let customerId;
+  let secondaryCustomerId;
   let debtId;
+  let secondaryDebtId;
   let adminToken;
   let managerToken;
 
@@ -71,6 +74,8 @@ test("customer statements reconcile sale payments and later repayments", async (
       await client.query("UPDATE users SET email_verified_at = now() WHERE id = $1", [admin.id]);
       const branch = await createBranch(client, business.id, { name: "Debt Main" }, true);
       branchId = branch.id;
+      const secondaryBranch = await createBranch(client, business.id, { name: "Debt Secondary" }, true);
+      secondaryBranchId = secondaryBranch.id;
       const cashAccount = await client.query(
         `INSERT INTO cash_accounts (business_id, branch_id, account_type, name)
          VALUES ($1, $2, 'cash_drawer', 'Debt sale cash')
@@ -100,9 +105,9 @@ test("customer statements reconcile sale payments and later repayments", async (
         [business.id],
       );
       const customer = await client.query(
-        `INSERT INTO customers (business_id, name, credit_limit)
-         VALUES ($1, $2, 50000) RETURNING id`,
-        [business.id, "Debt Customer"],
+        `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+         VALUES ($1, $2, $3, 50000) RETURNING id`,
+        [business.id, branchId, "Debt Customer"],
       );
       customerId = customer.rows[0].id;
       const sale = await client.query(
@@ -137,6 +142,28 @@ test("customer statements reconcile sale payments and later repayments", async (
         [business.id, customerId, sale.rows[0].id],
       );
       debtId = debt.rows[0].id;
+      const secondaryCustomer = await client.query(
+        `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+         VALUES ($1, $2, $3, 50000) RETURNING id`,
+        [business.id, secondaryBranchId, "Secondary Debt Customer"],
+      );
+      secondaryCustomerId = secondaryCustomer.rows[0].id;
+      const secondarySale = await client.query(
+        `INSERT INTO sales
+           (business_id, branch_id, transaction_number, subtotal, total,
+            sold_by, customer_id)
+         VALUES ($1, $2, $3, 5000, 5000, $4, $5)
+         RETURNING id`,
+        [business.id, secondaryBranchId, `DEBT-SECONDARY-${unique}`, admin.id, secondaryCustomerId],
+      );
+      const secondaryDebt = await client.query(
+        `INSERT INTO customer_debts
+           (business_id, customer_id, sale_id, original_amount)
+         VALUES ($1, $2, $3, 5000)
+         RETURNING id`,
+        [business.id, secondaryCustomerId, secondarySale.rows[0].id],
+      );
+      secondaryDebtId = secondaryDebt.rows[0].id;
 
       for (const [userId, token] of [
         [admin.id, createOpaqueToken()],
@@ -158,13 +185,32 @@ test("customer statements reconcile sale payments and later repayments", async (
     const initialDebts = await getDebts(request("/api/customer-debt", managerToken));
     assert.equal(initialDebts.status, 200);
     const debtPage = await initialDebts.json();
+    assert.equal(debtPage.debts.length, 1);
+    assert.equal(debtPage.debts[0].branch_id, branchId);
     assert.equal(debtPage.debts[0].original_amount, 14000);
     assert.equal(debtPage.debts[0].balance_due, 14000);
+
+    const secondaryBranchDebts = await getDebts(
+      request(`/api/customer-debt?branchId=${secondaryBranchId}`, adminToken),
+    );
+    assert.equal(secondaryBranchDebts.status, 200);
+    assert.deepEqual((await secondaryBranchDebts.json()).debts.map((debt) => debt.id), [secondaryDebtId]);
+
+    const forbiddenBranchDebts = await getDebts(
+      request(`/api/customer-debt?branchId=${secondaryBranchId}`, managerToken),
+    );
+    assert.equal(forbiddenBranchDebts.status, 403);
+
+    const crossBranchStatement = await getStatement(
+      request(`/api/customers/${secondaryCustomerId}/statement?branchId=${secondaryBranchId}`, managerToken),
+      { params: Promise.resolve({ customerId: secondaryCustomerId }) },
+    );
+    assert.equal(crossBranchStatement.status, 403);
 
     const repay = await postPayment(
       request(`/api/customer-debt/${debtId}/payment`, managerToken, {
         method: "POST",
-        body: JSON.stringify({ paymentMethod: "mtn_mobile_money", amount: 6000 }),
+        body: JSON.stringify({ branchId, paymentMethod: "mtn_mobile_money", amount: 6000 }),
       }),
       { params: Promise.resolve({ debtId }) },
     );
@@ -174,14 +220,14 @@ test("customer statements reconcile sale payments and later repayments", async (
     const overpay = await postPayment(
       request(`/api/customer-debt/${debtId}/payment`, adminToken, {
         method: "POST",
-        body: JSON.stringify({ paymentMethod: "cash", amount: 8001 }),
+        body: JSON.stringify({ branchId, paymentMethod: "cash", amount: 8001 }),
       }),
       { params: Promise.resolve({ debtId }) },
     );
     assert.equal(overpay.status, 400);
 
     const statement = await getStatement(
-      request(`/api/customers/${customerId}/statement`, adminToken),
+      request(`/api/customers/${customerId}/statement?branchId=${branchId}`, adminToken),
       { params: Promise.resolve({ customerId }) },
     );
     assert.equal(statement.status, 200);

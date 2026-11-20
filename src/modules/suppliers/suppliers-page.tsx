@@ -4,15 +4,18 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Factory, LoaderCircle, Pencil, Plus, Save, X } from "lucide-react";
 
 import { suppliersApi, type Supplier } from "@/lib/api/relationships-api";
+import { inventoryApi, type InventoryBranch } from "@/lib/api/inventory-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/shared/page-header";
+import { SelectField } from "@/components/shared/select-field";
 import { useAuthentication } from "@/modules/auth/auth-gate";
 
 interface SupplierForm {
+  branchId: string;
   name: string;
   contactPerson: string;
   phone: string;
@@ -23,6 +26,7 @@ interface SupplierForm {
 }
 
 const EMPTY_FORM: SupplierForm = {
+  branchId: "",
   name: "",
   contactPerson: "",
   phone: "",
@@ -38,6 +42,7 @@ function errorText(cause: unknown): string {
 
 function formFromSupplier(supplier: Supplier): SupplierForm {
   return {
+    branchId: supplier.branch_id ?? "",
     name: supplier.name,
     contactPerson: supplier.contact_person ?? "",
     phone: supplier.phone ?? "",
@@ -52,6 +57,10 @@ export function SuppliersPage() {
   const { user, permissions } = useAuthentication();
   const canReadSuppliers = user.role === "admin" || permissions.includes("suppliers.read");
   const canManageSuppliers = user.role === "admin" || permissions.includes("suppliers.manage");
+  const [branches, setBranches] = useState<InventoryBranch[]>([]);
+  const [branchScope, setBranchScope] = useState(
+    user.role === "manager" ? user.branch_id ?? "" : "",
+  );
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [form, setForm] = useState<SupplierForm>(EMPTY_FORM);
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
@@ -60,12 +69,32 @@ export function SuppliersPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!canReadSuppliers) {
+    if (user.role !== "admin") return;
+    let active = true;
+    inventoryApi.branches()
+      .then((result) => {
+        if (!active) return;
+        const activeBranches = result.filter((branch) => branch.is_active);
+        setBranches(activeBranches);
+        setBranchScope((current) =>
+          current === "unassigned" || activeBranches.some((branch) => branch.id === current)
+            ? current
+            : activeBranches[0]?.id ?? "unassigned",
+        );
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load branches. ${errorText(cause)}`);
+      });
+    return () => { active = false; };
+  }, [user.role]);
+
+  useEffect(() => {
+    if (!canReadSuppliers || !branchScope) {
       return;
     }
 
     let active = true;
-    suppliersApi.list()
+    suppliersApi.list(branchScope === "unassigned" ? null : branchScope)
       .then((result) => {
         if (active) {
           setSuppliers(result);
@@ -84,22 +113,31 @@ export function SuppliersPage() {
     return () => {
       active = false;
     };
-  }, [canReadSuppliers]);
+  }, [branchScope, canReadSuppliers]);
 
   function resetForm() {
     setEditingSupplierId(null);
-    setForm(EMPTY_FORM);
+    setForm({
+      ...EMPTY_FORM,
+      branchId: branchScope !== "unassigned" ? branchScope : "",
+    });
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const assignedBranchId = form.branchId || (branchScope !== "unassigned" ? branchScope : "");
     if (!canManageSuppliers || !form.name.trim()) {
+      return;
+    }
+    if (!assignedBranchId) {
+      setError("Select a branch before saving this supplier.");
       return;
     }
 
     setError(null);
     setIsSaving(true);
     const fields = {
+      branchId: assignedBranchId,
       name: form.name.trim(),
       contactPerson: form.contactPerson.trim() || null,
       phone: form.phone.trim() || null,
@@ -137,7 +175,7 @@ export function SuppliersPage() {
 
   function editSupplier(supplier: Supplier) {
     setEditingSupplierId(supplier.id);
-    setForm(formFromSupplier(supplier));
+    setForm({ ...formFromSupplier(supplier), branchId: supplier.branch_id ?? "" });
     setError(null);
   }
 
@@ -145,7 +183,24 @@ export function SuppliersPage() {
     <PageHeader
       eyebrow="Purchasing"
       title="Suppliers"
-      description="Keep supplier contact and tax details ready for purchase invoices."
+      description="Manage supplier contact and tax details separately for each branch."
+      actions={user.role === "admin" ? (
+        <SelectField
+          value={branchScope}
+          aria-label="Supplier branch"
+          onChange={(event) => {
+            setBranchScope(event.target.value);
+            setIsLoadingSuppliers(true);
+            setSuppliers([]);
+            setEditingSupplierId(null);
+            setForm(EMPTY_FORM);
+            setError(null);
+          }}
+        >
+          {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+          <option value="unassigned">Unassigned records</option>
+        </SelectField>
+      ) : undefined}
     />
   );
 
@@ -173,7 +228,9 @@ export function SuppliersPage() {
               <CardHeader>
                 <CardTitle>{editingSupplierId ? "Edit supplier" : "Add supplier"}</CardTitle>
                 <CardDescription>
-                  Supplier details are kept separate for your business.
+                  {branchScope === "unassigned"
+                    ? "Assign an existing unassigned supplier to a branch to make it available there."
+                    : "New suppliers are available only in the selected branch."}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -189,6 +246,22 @@ export function SuppliersPage() {
                       placeholder="e.g. Kigali Building Supplies"
                     />
                   </div>
+                  {user.role === "admin" &&
+                  editingSupplierId &&
+                  suppliers.find((supplier) => supplier.id === editingSupplierId)?.branch_id === null ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="supplier-branch-assignment">Assign to branch</Label>
+                      <SelectField
+                        id="supplier-branch-assignment"
+                        value={form.branchId}
+                        onChange={(event) => setForm((current) => ({ ...current, branchId: event.target.value }))}
+                        required
+                      >
+                        <option value="">Select branch</option>
+                        {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                      </SelectField>
+                    </div>
+                  ) : null}
                   <div className="space-y-2">
                     <Label htmlFor="supplier-contact-person">Contact person (optional)</Label>
                     <Input

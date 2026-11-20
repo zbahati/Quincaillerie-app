@@ -3,7 +3,7 @@ import { z } from "zod";
 const uuidSchema = z.string().uuid();
 
 export const cashAccountCreateSchema = z.object({
-  branchId: uuidSchema.nullable().optional(),
+  branchId: uuidSchema,
   accountType: z.enum(["cash_drawer", "bank", "mtn_wallet", "airtel_wallet", "other"]),
   name: z.string().trim().min(1).max(120),
 });
@@ -13,21 +13,26 @@ export const cashAccountOpeningSchema = z.object({
 });
 
 export const cashAccountUpdateSchema = z.object({
-  isActive: z.boolean(),
+  branchId: uuidSchema.optional(),
+  isActive: z.boolean().optional(),
+}).refine((value) => value.branchId !== undefined || value.isActive !== undefined, {
+  message: "Select a branch or change the account status.",
 });
 
 export const cashTransferCreateSchema = z.object({
+  branchId: uuidSchema,
   fromAccountId: uuidSchema,
   toAccountId: uuidSchema,
   amount: z.number().int().min(1).refine(Number.isSafeInteger),
 });
 
 export const cashTransferConfirmSchema = z.object({
+  branchId: uuidSchema,
   confirmationReference: z.string().trim().max(200).nullable().optional(),
 });
 
 export const expenseCreateSchema = z.object({
-  branchId: uuidSchema.nullable().optional(),
+  branchId: uuidSchema,
   category: z.enum(["rent", "electricity", "transport", "salaries", "internet", "repairs", "security", "other"]),
   amount: z.number().int().min(1).refine(Number.isSafeInteger),
   expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

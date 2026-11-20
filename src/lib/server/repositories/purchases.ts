@@ -166,9 +166,9 @@ export async function createPurchase(
 ): Promise<PurchaseRecord> {
   const supplier = await client.query<{ id: string }>(
     `SELECT id FROM suppliers
-     WHERE business_id = $1 AND id = $2 AND is_active = TRUE
+     WHERE business_id = $1 AND id = $2 AND branch_id = $3 AND is_active = TRUE
      FOR SHARE`,
-    [businessId, input.supplierId],
+    [businessId, input.supplierId, branchId],
   );
   if (supplier.rowCount !== 1) {
     throw new PurchaseRuleError(404, "supplier_not_found", "The selected supplier is unavailable.");

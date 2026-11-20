@@ -33,6 +33,7 @@ test("income statement derives COGS and balance sheet derives branch assets and 
   const date = new Date().toISOString().slice(0, 10);
   let businessId;
   let branchId;
+  let secondaryBranchId;
   let accountId;
   let sessionHash;
   let sessionToken;
@@ -59,11 +60,12 @@ test("income statement derives COGS and balance sheet derives branch assets and 
       });
       const branch = await createBranch(client, businessId, { name: "Statements branch" }, true);
       branchId = branch.id;
+      secondaryBranchId = (await createBranch(client, businessId, { name: "Other statements branch" }, true)).id;
       const customer = await client.query(
-        `INSERT INTO customers (business_id, name, credit_limit)
-         VALUES ($1, 'Statement customer', 50000)
+        `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+         VALUES ($1, $2, 'Statement customer', 50000)
          RETURNING id`,
-        [businessId],
+        [businessId, branchId],
       );
       await client.query(
         `INSERT INTO sales
@@ -97,6 +99,19 @@ test("income statement derives COGS and balance sheet derives branch assets and 
          VALUES ($1, $2, $3, 11000, 8000)`,
         [businessId, branchId, product.rows[0].id],
       );
+      const fractionalProduct = await client.query(
+        `INSERT INTO products
+           (business_id, name, sku, base_unit_id, purchase_price, selling_price)
+         VALUES ($1, 'Fractional value product', $2, $3, 3333, 5000)
+         RETURNING id`,
+        [businessId, `FRAC-${unique.slice(-8)}`, unit.rows[0].id],
+      );
+      await client.query(
+        `INSERT INTO inventory_balances
+           (business_id, branch_id, product_id, quantity_on_hand, average_unit_cost)
+         VALUES ($1, $2, $3, 1500, 3333)`,
+        [businessId, branchId, fractionalProduct.rows[0].id],
+      );
       await client.query(
         `INSERT INTO stock_movements
            (business_id, branch_id, product_id, movement_type, quantity_delta,
@@ -112,8 +127,9 @@ test("income statement derives COGS and balance sheet derives branch assets and 
         [businessId, branchId, date],
       );
       const supplier = await client.query(
-        `INSERT INTO suppliers (business_id, name) VALUES ($1, 'Statement supplier') RETURNING id`,
-        [businessId],
+        `INSERT INTO suppliers (business_id, branch_id, name)
+         VALUES ($1, $2, 'Statement supplier') RETURNING id`,
+        [businessId, branchId],
       );
       const purchase = await client.query(
         `INSERT INTO purchases
@@ -134,6 +150,24 @@ test("income statement derives COGS and balance sheet derives branch assets and 
            (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
          VALUES ($1, $2, 0, $3, $3)`,
         [businessId, accountId, admin.id],
+      );
+      const secondaryAccount = await client.query(
+        `INSERT INTO cash_accounts (business_id, branch_id, account_type, name)
+         VALUES ($1, $2, 'cash_drawer', 'Other branch cash')
+         RETURNING id`,
+        [businessId, secondaryBranchId],
+      );
+      await client.query(
+        `INSERT INTO cash_account_openings
+           (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
+         VALUES ($1, $2, 99000, $3, $3)`,
+        [businessId, secondaryAccount.rows[0].id, admin.id],
+      );
+      await client.query(
+        `INSERT INTO expenses
+           (business_id, branch_id, category, amount, expense_date, payment_method, description, responsible_name)
+         VALUES ($1, $2, 'rent', 17000, $3, 'cash', 'Other branch rent', 'Statements Admin')`,
+        [businessId, secondaryBranchId, date],
       );
       const salePayment = await client.query(
         `INSERT INTO sale_payments
@@ -189,14 +223,26 @@ test("income statement derives COGS and balance sheet derives branch assets and 
     assert.equal(income.operatingResult, 3000);
 
     const balance = await calculateBalanceSheet(pool, businessId, branchId, date);
-    assert.equal(balance.inventory, 80000);
+    assert.equal(balance.inventory, 85000);
     assert.equal(balance.accountsReceivable, 0);
     assert.equal(balance.cashAndBank, 16000);
     assert.equal(balance.accountsPayable, 26000);
     assert.equal(balance.retainedEarnings, 3000);
-    assert.equal(balance.totalAssets, 96000);
-    assert.equal(balance.ownerEquity, 67000);
+    assert.equal(balance.totalAssets, 101000);
+    assert.equal(balance.ownerEquity, 72000);
     assert.equal(balance.totalLiabilitiesAndEquity, balance.totalAssets);
+    for (const amount of [
+      balance.inventory,
+      balance.accountsReceivable,
+      balance.cashAndBank,
+      balance.accountsPayable,
+      balance.retainedEarnings,
+      balance.ownerEquity,
+      balance.totalAssets,
+      balance.totalLiabilitiesAndEquity,
+    ]) {
+      assert.equal(amount % 100, 0);
+    }
 
     const apiResponse = await getBalanceSheetRoute(new NextRequest(
       `http://localhost:3000/api/reports/balance-sheet?branchId=${branchId}&reportDate=${date}`,
@@ -232,8 +278,10 @@ test("income statement derives COGS and balance sheet derives branch assets and 
       await pool.query("DELETE FROM purchase_payments WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM cash_account_openings WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM cash_accounts WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM purchases WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM products WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM customers WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM suppliers WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM users WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM branches WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM businesses WHERE id = $1", [businessId]);

@@ -11,6 +11,7 @@ const [
   { getDatabasePool },
   { withTransaction },
   { createBusiness },
+  { createBranch },
   { createAdminUser },
   { seedDefaultManagerPermissions },
   { createAuthSession },
@@ -23,6 +24,7 @@ const [
   import("../../src/lib/server/db/pool.ts"),
   import("../../src/lib/server/db/transaction.ts"),
   import("../../src/lib/server/repositories/businesses.ts"),
+  import("../../src/lib/server/repositories/branches.ts"),
   import("../../src/lib/server/repositories/users.ts"),
   import("../../src/lib/server/repositories/manager-permissions.ts"),
   import("../../src/lib/server/repositories/auth-sessions.ts"),
@@ -40,7 +42,8 @@ test("cash transfers remain pending until Admin confirmation", async () => {
   const sessionHashes = [];
   const cookieName = authSessionCookieName();
   const originHeaders = { Origin: "http://localhost:3000", "Content-Type": "application/json" };
-  let businessId;
+  let branchId;
+  let secondaryBranchId;
   let adminToken;
 
   function request(path, token, options = {}) {
@@ -57,7 +60,8 @@ test("cash transfers remain pending until Admin confirmation", async () => {
   try {
     await withTransaction(async (client) => {
       const business = await createBusiness(client, { name: `Transfer ${unique}` });
-      businessId = business.id;
+      branchId = (await createBranch(client, business.id, { name: "Transfer main" }, true)).id;
+      secondaryBranchId = (await createBranch(client, business.id, { name: "Transfer secondary" }, true)).id;
       businessIds.push(business.id);
       const admin = await createAdminUser(client, {
         businessId: business.id,
@@ -88,16 +92,22 @@ test("cash transfers remain pending until Admin confirmation", async () => {
 
     const sourceResponse = await postAccount(request("/api/cash-accounts", adminToken, {
       method: "POST",
-      body: JSON.stringify({ accountType: "bank", name: "Source bank" }),
+      body: JSON.stringify({ branchId, accountType: "bank", name: "Source bank" }),
     }));
     assert.equal(sourceResponse.status, 201);
     const source = (await sourceResponse.json()).account;
     const destinationResponse = await postAccount(request("/api/cash-accounts", adminToken, {
       method: "POST",
-      body: JSON.stringify({ accountType: "mtn_wallet", name: "Destination wallet" }),
+      body: JSON.stringify({ branchId, accountType: "mtn_wallet", name: "Destination wallet" }),
     }));
     assert.equal(destinationResponse.status, 201);
     const destination = (await destinationResponse.json()).account;
+    const secondaryResponse = await postAccount(request("/api/cash-accounts", adminToken, {
+      method: "POST",
+      body: JSON.stringify({ branchId: secondaryBranchId, accountType: "bank", name: "Secondary bank" }),
+    }));
+    assert.equal(secondaryResponse.status, 201);
+    const secondaryAccount = (await secondaryResponse.json()).account;
 
     await postOpening(request(`/api/cash-accounts/${source.id}/opening`, adminToken, {
       method: "POST",
@@ -107,42 +117,56 @@ test("cash transfers remain pending until Admin confirmation", async () => {
       method: "POST",
       body: JSON.stringify({ openingAmount: 20000 }),
     }), { params: Promise.resolve({ accountId: destination.id }) });
+    await postOpening(request(`/api/cash-accounts/${secondaryAccount.id}/opening`, adminToken, {
+      method: "POST",
+      body: JSON.stringify({ openingAmount: 50000 }),
+    }), { params: Promise.resolve({ accountId: secondaryAccount.id }) });
 
     const createResponse = await postTransfer(request("/api/cash-transfers", adminToken, {
       method: "POST",
-      body: JSON.stringify({ fromAccountId: source.id, toAccountId: destination.id, amount: 30000 }),
+      body: JSON.stringify({ branchId, fromAccountId: source.id, toAccountId: destination.id, amount: 30000 }),
     }));
     assert.equal(createResponse.status, 201);
     const transfer = (await createResponse.json()).transfer;
     assert.equal(transfer.status, "pending");
 
-    const pendingAccounts = await getAccounts(request("/api/cash-accounts", adminToken));
+    const pendingAccounts = await getAccounts(request(`/api/cash-accounts?branchId=${branchId}`, adminToken));
     const pending = (await pendingAccounts.json()).accounts;
+    assert.equal(pending.length, 2);
     assert.equal(pending.find((account) => account.id === source.id).available_balance, 100000);
     assert.equal(pending.find((account) => account.id === destination.id).available_balance, 20000);
 
     const insufficient = await postTransfer(request("/api/cash-transfers", adminToken, {
       method: "POST",
-      body: JSON.stringify({ fromAccountId: source.id, toAccountId: destination.id, amount: 100001 }),
+      body: JSON.stringify({ branchId, fromAccountId: source.id, toAccountId: destination.id, amount: 100001 }),
     }));
     assert.equal(insufficient.status, 400);
+    const crossBranchTransfer = await postTransfer(request("/api/cash-transfers", adminToken, {
+      method: "POST",
+      body: JSON.stringify({ branchId, fromAccountId: source.id, toAccountId: secondaryAccount.id, amount: 1000 }),
+    }));
+    assert.equal(crossBranchTransfer.status, 400);
+    const secondaryAccounts = await getAccounts(
+      request(`/api/cash-accounts?branchId=${secondaryBranchId}`, adminToken),
+    );
+    assert.deepEqual((await secondaryAccounts.json()).accounts.map((account) => account.id), [secondaryAccount.id]);
 
     const confirmResponse = await postConfirm(
       request(`/api/cash-transfers/${transfer.id}/confirm`, adminToken, {
         method: "POST",
-        body: JSON.stringify({ confirmationReference: "AUTH-001" }),
+        body: JSON.stringify({ branchId, confirmationReference: "AUTH-001" }),
       }),
       { params: Promise.resolve({ transferId: transfer.id }) },
     );
     assert.equal(confirmResponse.status, 200);
     assert.equal((await confirmResponse.json()).transfer.status, "confirmed");
 
-    const confirmedAccounts = await getAccounts(request("/api/cash-accounts", adminToken));
+    const confirmedAccounts = await getAccounts(request(`/api/cash-accounts?branchId=${branchId}`, adminToken));
     const confirmed = (await confirmedAccounts.json()).accounts;
     assert.equal(confirmed.find((account) => account.id === source.id).available_balance, 70000);
     assert.equal(confirmed.find((account) => account.id === destination.id).available_balance, 50000);
 
-    const history = await getTransfers(request("/api/cash-transfers", adminToken));
+    const history = await getTransfers(request(`/api/cash-transfers?branchId=${branchId}`, adminToken));
     assert.equal(history.status, 200);
     assert.equal((await history.json()).transfers[0].status, "confirmed");
   } finally {
@@ -157,6 +181,7 @@ test("cash transfers remain pending until Admin confirmation", async () => {
       await pool.query("DELETE FROM cash_accounts WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM business_manager_permissions WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM users WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM branches WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM businesses WHERE id = $1", [businessId]);
     }
     await pool.end();

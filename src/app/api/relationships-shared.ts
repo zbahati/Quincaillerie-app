@@ -13,6 +13,15 @@ export async function authenticatedRelationshipContext(request: NextRequest) {
   return context;
 }
 
+export function parseRelationshipBranchId(value: string | null): string | null {
+  if (value === "unassigned") return null;
+  const parsed = supplierIdSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+  }
+  return parsed.data;
+}
+
 export function parseSupplierId(value: string): string {
   const parsed = supplierIdSchema.safeParse(value);
   if (!parsed.success) {
@@ -33,6 +42,7 @@ export function supplierDto(supplier: SupplierRecord) {
   return {
     id: supplier.id,
     business_id: supplier.businessId,
+    branch_id: supplier.branchId,
     name: supplier.name,
     contact_person: supplier.contactPerson,
     phone: supplier.phone,
@@ -47,6 +57,7 @@ export function customerDto(customer: CustomerRecord) {
   return {
     id: customer.id,
     business_id: customer.businessId,
+    branch_id: customer.branchId,
     name: customer.name,
     phone: customer.phone,
     address: customer.address,

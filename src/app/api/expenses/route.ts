@@ -13,9 +13,14 @@ async function context(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    const rawBranchId = request.nextUrl.searchParams.get("branchId");
+    const branchId = rawBranchId === "unassigned" ? null : rawBranchId;
+    if (branchId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(branchId)) {
+      throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+    }
     const offset = Number(request.nextUrl.searchParams.get("offset") ?? 0);
     const limit = Number(request.nextUrl.searchParams.get("limit") ?? 20);
-    const page = await listBusinessExpenses(await context(request), offset, limit);
+    const page = await listBusinessExpenses(await context(request), branchId, offset, limit);
     return jsonResponse({
       items: page.items.map((expense) => ({
         id: expense.id,

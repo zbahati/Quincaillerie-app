@@ -1,6 +1,6 @@
 import { authenticatedDebtContext } from "@/app/api/customer-debt/_shared";
 import { handleAuthRouteError, jsonResponse } from "@/lib/server/auth/http";
-import { customerIdSchema } from "@/lib/server/schemas/customer-debt";
+import { customerDebtBranchIdSchema, customerIdSchema } from "@/lib/server/schemas/customer-debt";
 import { getBusinessCustomerStatement } from "@/lib/server/services/customer-debt";
 import { AuthServiceError } from "@/lib/server/auth/errors";
 import type { NextRequest } from "next/server";
@@ -15,10 +15,19 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     if (!parsed.success) {
       throw new AuthServiceError(400, "invalid_customer_id", "The customer ID is invalid.");
     }
-    const statement = await getBusinessCustomerStatement(context, parsed.data);
+    const rawBranchId = request.nextUrl.searchParams.get("branchId");
+    const parsedBranchId = rawBranchId === null
+      ? undefined
+      : customerDebtBranchIdSchema.safeParse(rawBranchId);
+    if (parsedBranchId && !parsedBranchId.success) {
+      throw new AuthServiceError(400, "invalid_branch_id", "The branch ID is invalid.");
+    }
+    const branchId = parsedBranchId?.success ? parsedBranchId.data : undefined;
+    const statement = await getBusinessCustomerStatement(context, parsed.data, branchId);
     return jsonResponse({
       customer: {
         id: statement.customer.id,
+        branch_id: statement.customer.branchId,
         name: statement.customer.name,
         phone: statement.customer.phone,
         address: statement.customer.address,

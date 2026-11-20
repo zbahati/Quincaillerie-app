@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { LoaderCircle, Wallet } from "lucide-react";
 
 import { customerDebtApi, type CustomerDebt } from "@/lib/api/customer-debt-api";
+import { inventoryApi, type InventoryBranch } from "@/lib/api/inventory-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,21 +39,44 @@ export function PaymentsPage() {
   const { user, permissions } = useAuthentication();
   const canRead = user.role === "admin" || permissions.includes("customer_debts.read");
   const canManage = user.role === "admin" || permissions.includes("customer_payments.manage");
+  const [branches, setBranches] = useState<InventoryBranch[]>([]);
+  const [branchScope, setBranchScope] = useState(user.role === "manager" ? user.branch_id ?? "" : "");
   const [debts, setDebts] = useState<CustomerDebt[]>([]);
   const [selectedDebtId, setSelectedDebtId] = useState("");
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(user.role !== "manager" || Boolean(user.branch_id));
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!canRead) {
+    if (user.role !== "admin") return;
+    let active = true;
+    inventoryApi.branches()
+      .then((result) => {
+        if (!active) return;
+        const activeBranches = result.filter((branch) => branch.is_active);
+        setBranches(activeBranches);
+        if (activeBranches.length === 0) setIsLoading(false);
+        setBranchScope((current) =>
+          activeBranches.some((branch) => branch.id === current)
+            ? current
+            : activeBranches[0]?.id ?? "",
+        );
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load customer debts. ${errorText(cause)}`);
+      })
+    return () => { active = false; };
+  }, [user.role]);
+
+  useEffect(() => {
+    if (!canRead || !branchScope) {
       return;
     }
     let active = true;
-    customerDebtApi.list()
+    customerDebtApi.list(branchScope)
       .then((result) => {
         if (!active) return;
         setDebts(result);
@@ -69,7 +93,7 @@ export function PaymentsPage() {
         if (active) setIsLoading(false);
       });
     return () => { active = false; };
-  }, [canRead]);
+  }, [canRead, branchScope]);
 
   const selectedDebt = debts.find((debt) => debt.id === selectedDebtId);
   const outstandingTotal = debts.reduce((sum, debt) => sum + debt.balance_due, 0);
@@ -91,6 +115,7 @@ export function PaymentsPage() {
     setIsSaving(true);
     try {
       const payment = await customerDebtApi.repay(selectedDebt.id, {
+        branchId: selectedDebt.branch_id,
         paymentMethod,
         amount: parsedAmount,
       });
@@ -126,6 +151,25 @@ export function PaymentsPage() {
       <PageHeader eyebrow="Business" title="Customer payments" description="Record repayments against customer credit balances." />
       {error ? <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</div> : null}
       {notice ? <div role="status" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">{notice}</div> : null}
+      {user.role === "admin" ? (
+        <div className="max-w-sm space-y-2">
+          <Label htmlFor="debt-branch">Branch</Label>
+          <SelectField
+            id="debt-branch"
+            value={branchScope}
+            onChange={(event) => {
+              setBranchScope(event.target.value);
+              setDebts([]);
+              setIsLoading(true);
+              setSelectedDebtId("");
+              setError(null);
+            }}
+          >
+            <option value="">Select a branch</option>
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+          </SelectField>
+        </div>
+      ) : null}
       <div className="grid gap-6 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
         {canManage ? (
           <Card>

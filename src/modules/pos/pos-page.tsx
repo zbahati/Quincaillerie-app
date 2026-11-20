@@ -132,11 +132,10 @@ export function PosPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([posApi.branches(), customersApi.list()])
-      .then(([branchResult, customerResult]) => {
+    posApi.branches()
+      .then((branchResult) => {
         if (!active) return;
         setBranches(branchResult);
-        setCustomers(customerResult.filter((customer) => customer.is_active));
         const preferredBranchId = user.role === "manager" ? user.branch_id ?? "" : "";
         const selectedBranchId = branchResult.some((branch) => branch.id === preferredBranchId)
           ? preferredBranchId
@@ -152,6 +151,19 @@ export function PosPage() {
       });
     return () => { active = false; };
   }, [user.branch_id, user.role]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    let active = true;
+    customersApi.list(branchId)
+      .then((result) => {
+        if (active) setCustomers(result.filter((customer) => customer.is_active));
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load branch customers. ${errorText(cause)}`);
+      });
+    return () => { active = false; };
+  }, [branchId]);
 
   useEffect(() => {
     if (!branchId) return;
@@ -377,7 +389,7 @@ export function PosPage() {
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <div className="space-y-2">
                 <Label htmlFor="pos-branch">Branch</Label>
-                <SelectField id="pos-branch" value={branchId} onChange={(event) => { const selectedBranchId = event.target.value; setPaymentAccountsLoadingForBranch(selectedBranchId); setBranchId(selectedBranchId); setCart([]); setPaymentAccounts([]); setPaymentLines((current) => current.map((line) => ({ ...line, cashAccountId: "" }))); }} disabled={user.role === "manager"}>
+                <SelectField id="pos-branch" value={branchId} onChange={(event) => { const selectedBranchId = event.target.value; setPaymentAccountsLoadingForBranch(selectedBranchId); setBranchId(selectedBranchId); setCustomerId(""); setCustomers([]); setCart([]); setPaymentAccounts([]); setPaymentLines((current) => current.map((line) => ({ ...line, cashAccountId: "" }))); }} disabled={user.role === "manager"}>
                   {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </SelectField>
               </div>

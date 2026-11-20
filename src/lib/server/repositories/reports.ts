@@ -89,6 +89,12 @@ function checkedSubtract(left: number, right: number, field: string): number {
   return result;
 }
 
+function roundToWholeRwf(amountInHundredths: number, field: string): number {
+  const amount = BigInt(amountInHundredths);
+  const roundedRwf = amount >= 0n ? (amount + 50n) / 100n : (amount - 50n) / 100n;
+  return safeInteger((roundedRwf * 100n).toString(), field);
+}
+
 export async function calculateDailyReport(
   pool: Pool,
   businessId: string,
@@ -150,8 +156,7 @@ export async function calculateDailyReport(
   const expenses = await pool.query<{ total: string }>(
     `SELECT COALESCE(SUM(amount), 0)::text AS total
      FROM expenses
-     WHERE business_id = $1
-       AND (branch_id = $2 OR branch_id IS NULL)
+     WHERE business_id = $1 AND branch_id = $2
        AND expense_date >= $3::date
        AND expense_date <= $4::date`,
     [businessId, branchId, fromDate, toDate],
@@ -159,8 +164,7 @@ export async function calculateDailyReport(
   const expenseCategories = await pool.query<{ category: string; amount: string }>(
     `SELECT category, SUM(amount)::text AS amount
      FROM expenses
-     WHERE business_id = $1
-       AND (branch_id = $2 OR branch_id IS NULL)
+     WHERE business_id = $1 AND branch_id = $2
        AND expense_date >= $3::date
        AND expense_date <= $4::date
      GROUP BY category
@@ -203,7 +207,7 @@ export async function calculateDailyReport(
     `SELECT COALESCE(SUM(o.opening_amount), 0)::text AS amount
      FROM cash_account_openings o
      JOIN cash_accounts ca ON ca.id = o.account_id AND ca.business_id = o.business_id
-     WHERE o.business_id = $1 AND (ca.branch_id = $2 OR ca.branch_id IS NULL)`,
+     WHERE o.business_id = $1 AND ca.branch_id = $2`,
     [businessId, branchId],
   );
   const openingCash = safeInteger(openingCashRow.rows[0]?.amount ?? "0", "opening cash");
@@ -212,7 +216,7 @@ export async function calculateDailyReport(
      FROM cash_movements cm
      JOIN cash_accounts ca ON ca.id = cm.account_id AND ca.business_id = cm.business_id
      WHERE cm.business_id = $1
-       AND (ca.branch_id = $2 OR ca.branch_id IS NULL)
+       AND ca.branch_id = $2
        AND cm.recorded_at::date >= $3::date
        AND cm.recorded_at::date <= $4::date
      GROUP BY direction`,
@@ -295,8 +299,7 @@ export async function calculateIncomeStatement(
   const expenses = await pool.query<{ amount: string }>(
     `SELECT COALESCE(SUM(amount), 0)::text AS amount
      FROM expenses
-     WHERE business_id = $1
-       AND (branch_id = $2 OR branch_id IS NULL)
+     WHERE business_id = $1 AND branch_id = $2
        AND expense_date >= $3::date
        AND expense_date <= $4::date`,
     [businessId, branchId, fromDate, toDate],
@@ -304,8 +307,7 @@ export async function calculateIncomeStatement(
   const categories = await pool.query<{ category: string; amount: string }>(
     `SELECT category, SUM(amount)::text AS amount
      FROM expenses
-     WHERE business_id = $1
-       AND (branch_id = $2 OR branch_id IS NULL)
+     WHERE business_id = $1 AND branch_id = $2
        AND expense_date >= $3::date
        AND expense_date <= $4::date
      GROUP BY category
@@ -365,7 +367,7 @@ export async function calculateBalanceSheet(
      LEFT JOIN cash_account_openings o
        ON o.business_id = ca.business_id AND o.account_id = ca.id
      WHERE ca.business_id = $1
-       AND (ca.branch_id = $2 OR ca.branch_id IS NULL)
+       AND ca.branch_id = $2
      ORDER BY ca.account_type, lower(ca.name), ca.id`,
     [businessId, branchId],
   );
@@ -382,14 +384,17 @@ export async function calculateBalanceSheet(
       [businessId, row.id, reportDate],
     );
     const movementTotal = safeInteger(movements.rows[0]?.amount ?? "0", "cash movement balance");
-    const balance = checkedAdd(opening, movementTotal, "cash account balance");
+    const balance = roundToWholeRwf(
+      checkedAdd(opening, movementTotal, "cash account balance"),
+      "cash account balance",
+    );
     if (balance < 0) throw new Error("A cash account balance is negative for the selected date.");
     accounts.push({ accountType: row.accountType, name: row.name, balance });
     cashAndBank = checkedAdd(cashAndBank, balance, "cash and bank total");
   }
 
   const inventory = await pool.query<{ amount: string; minimumQuantity: string | null }>(
-    `SELECT COALESCE(ROUND(SUM(
+    `SELECT COALESCE((ROUND(SUM(
               (ib.quantity_on_hand - COALESCE((
                 SELECT SUM(sm.quantity_delta)
                 FROM stock_movements sm
@@ -397,8 +402,8 @@ export async function calculateBalanceSheet(
                   AND sm.branch_id = ib.branch_id
                   AND sm.product_id = ib.product_id
                   AND sm.created_at::date > $3::date
-              ), 0))::numeric * ib.average_unit_cost::numeric / 1000
-            ))::bigint::text, '0') AS amount,
+              ), 0))::numeric * ib.average_unit_cost::numeric / 100000
+            )) * 100)::bigint::text, '0') AS amount,
             MIN(ib.quantity_on_hand - COALESCE((
               SELECT SUM(sm.quantity_delta)
               FROM stock_movements sm
@@ -442,7 +447,10 @@ export async function calculateBalanceSheet(
        AND d.created_at::date <= $3::date`,
     [businessId, branchId, reportDate],
   );
-  const accountsReceivable = safeNonNegativeInteger(receivable.rows[0]?.amount ?? "0", "accounts receivable");
+  const accountsReceivable = roundToWholeRwf(
+    safeNonNegativeInteger(receivable.rows[0]?.amount ?? "0", "accounts receivable"),
+    "accounts receivable",
+  );
 
   const payable = await pool.query<{ amount: string }>(
     `SELECT COALESCE(SUM(
@@ -464,7 +472,10 @@ export async function calculateBalanceSheet(
        AND p.created_at::date <= $3::date`,
     [businessId, branchId, reportDate],
   );
-  const accountsPayable = safeNonNegativeInteger(payable.rows[0]?.amount ?? "0", "accounts payable");
+  const accountsPayable = roundToWholeRwf(
+    safeNonNegativeInteger(payable.rows[0]?.amount ?? "0", "accounts payable"),
+    "accounts payable",
+  );
 
   const totalAssets = checkedAdd(
     checkedAdd(cashAndBank, inventoryValue, "total assets"),
@@ -488,19 +499,22 @@ export async function calculateBalanceSheet(
        ), 0)::text AS cost,
        COALESCE((
          SELECT SUM(e.amount) FROM expenses e
-         WHERE e.business_id = $1
-           AND (e.branch_id = $2 OR e.branch_id IS NULL)
+         WHERE e.business_id = $1 AND e.branch_id = $2
            AND e.expense_date <= $3::date
        ), 0)::text AS expenses`,
     [businessId, branchId, reportDate],
   );
-  const retainedEarnings = checkedSubtract(
+  const retainedEarningsInHundredths = checkedSubtract(
     checkedSubtract(
       safeInteger(retained.rows[0]?.revenue ?? "0", "retained earnings revenue"),
       safeInteger(retained.rows[0]?.cost ?? "0", "retained earnings cost of goods sold"),
       "retained earnings",
     ),
     safeInteger(retained.rows[0]?.expenses ?? "0", "retained earnings expenses"),
+    "retained earnings",
+  );
+  const retainedEarnings = roundToWholeRwf(
+    retainedEarningsInHundredths,
     "retained earnings",
   );
   const ownerEquity = checkedSubtract(

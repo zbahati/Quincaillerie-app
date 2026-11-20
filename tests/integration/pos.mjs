@@ -47,6 +47,7 @@ test("POS enforces branch stock, split totals, FIFO costs and customer credit", 
   let otherBranchId;
   let productId;
   let customerId;
+  let otherBranchCustomerId;
   let cashAccountId;
   let mtnAccountId;
   let otherBranchCashAccountId;
@@ -115,11 +116,18 @@ test("POS enforces branch stock, split totals, FIFO costs and customer credit", 
       );
 
       const customer = await client.query(
-        `INSERT INTO customers (business_id, name, credit_limit)
-         VALUES ($1, $2, $3) RETURNING id`,
-        [business.id, "POS Customer", 50000],
+        `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [business.id, branchId, "POS Customer", 50000],
       );
       customerId = customer.rows[0].id;
+      const otherBranchCustomer = await client.query(
+        `INSERT INTO customers (business_id, branch_id, name, credit_limit)
+         VALUES ($1, $2, 'Other branch POS customer', 50000)
+         RETURNING id`,
+        [business.id, otherBranchId],
+      );
+      otherBranchCustomerId = otherBranchCustomer.rows[0].id;
       const unit = await client.query(`SELECT id FROM units WHERE code = 'pc'`);
       const product = await client.query(
         `INSERT INTO products
@@ -228,6 +236,17 @@ test("POS enforces branch stock, split totals, FIFO costs and customer credit", 
     assert.equal(creditReceipt.total, 10000);
     assert.equal(creditReceipt.amount_paid, 5000);
     assert.equal(creditReceipt.balance_due, 5000);
+
+    const wrongBranchCustomer = await checkoutPos(request("/api/pos/checkout", adminToken, {
+      method: "POST",
+      body: JSON.stringify({
+        branchId,
+        customerId: otherBranchCustomerId,
+        items: [{ productId, quantity: 1000, sellingPrice: 12000, priceChangeReason: null }],
+        payments: [{ paymentMethod: "cash", amount: 12000, cashAccountId }],
+      }),
+    }));
+    assert.equal(wrongBranchCustomer.status, 400);
 
     const cashBalance = await accountBalance(pool, businessId, cashAccountId);
     const mtnBalance = await accountBalance(pool, businessId, mtnAccountId);

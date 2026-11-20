@@ -11,6 +11,7 @@ const [
   { getDatabasePool },
   { withTransaction },
   { createBusiness },
+  { createBranch },
   { createAdminUser },
   { seedDefaultManagerPermissions },
   { createAuthSession },
@@ -22,6 +23,7 @@ const [
   import("../../src/lib/server/db/pool.ts"),
   import("../../src/lib/server/db/transaction.ts"),
   import("../../src/lib/server/repositories/businesses.ts"),
+  import("../../src/lib/server/repositories/branches.ts"),
   import("../../src/lib/server/repositories/users.ts"),
   import("../../src/lib/server/repositories/manager-permissions.ts"),
   import("../../src/lib/server/repositories/auth-sessions.ts"),
@@ -38,7 +40,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
   const sessionHashes = [];
   const cookieName = authSessionCookieName();
   const originHeaders = { Origin: "http://localhost:3000", "Content-Type": "application/json" };
-  let businessId;
+  let branchId;
   let adminToken;
 
   function request(path, token, options = {}) {
@@ -55,7 +57,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
   try {
     await withTransaction(async (client) => {
       const business = await createBusiness(client, { name: `Ledger ${unique}` });
-      businessId = business.id;
+      branchId = (await createBranch(client, business.id, { name: "Ledger branch" }, true)).id;
       businessIds.push(business.id);
       const admin = await createAdminUser(client, {
         businessId: business.id,
@@ -91,7 +93,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
 
     const created = await postAccount(request("/api/cash-accounts", adminToken, {
       method: "POST",
-      body: JSON.stringify({ branchId: null, accountType: "bank", name: "Main bank" }),
+      body: JSON.stringify({ branchId, accountType: "bank", name: "Main bank" }),
     }));
     assert.equal(created.status, 201);
     const account = (await created.json()).account;
@@ -109,7 +111,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
     const expense = await postExpense(request("/api/expenses", adminToken, {
       method: "POST",
       body: JSON.stringify({
-        branchId: null,
+        branchId,
         category: "rent",
         amount: 25000,
         expenseDate: new Date().toISOString().slice(0, 10),
@@ -121,13 +123,14 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
     }));
     assert.equal(expense.status, 201);
 
-    const accounts = await getAccounts(request("/api/cash-accounts", adminToken));
+    const accounts = await getAccounts(request(`/api/cash-accounts?branchId=${branchId}`, adminToken));
     assert.equal(accounts.status, 200);
     assert.equal((await accounts.json()).accounts[0].available_balance, 75000);
 
     const insufficient = await postExpense(request("/api/expenses", adminToken, {
       method: "POST",
       body: JSON.stringify({
+        branchId,
         category: "other",
         amount: 75001,
         expenseDate: new Date().toISOString().slice(0, 10),
@@ -139,7 +142,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
     }));
     assert.equal(insufficient.status, 400);
 
-    const history = await getExpenses(request("/api/expenses?offset=0&limit=20", adminToken));
+    const history = await getExpenses(request(`/api/expenses?branchId=${branchId}&offset=0&limit=20`, adminToken));
     assert.equal(history.status, 200);
     assert.equal((await history.json()).total_count, 1);
   } finally {
@@ -154,6 +157,7 @@ test("cash accounts open once and account-backed expenses reduce verified funds"
       await pool.query("DELETE FROM cash_accounts WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM business_manager_permissions WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM users WHERE business_id = $1", [businessId]);
+      await pool.query("DELETE FROM branches WHERE business_id = $1", [businessId]);
       await pool.query("DELETE FROM businesses WHERE id = $1", [businessId]);
     }
     await pool.end();

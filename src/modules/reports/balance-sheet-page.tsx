@@ -18,8 +18,9 @@ function localDate(): string {
 
 function formatMoney(value: number): string {
   const amount = BigInt(value);
-  const whole = amount / 100n;
-  const fraction = amount % 100n;
+  const absoluteAmount = amount < 0n ? -amount : amount;
+  const whole = absoluteAmount / 100n;
+  const fraction = absoluteAmount % 100n;
   return `${amount < 0n ? "−" : ""}${new Intl.NumberFormat("en-RW").format(whole)}${fraction === 0n ? "" : `.${fraction.toString().padStart(2, "0")}`} RWF`;
 }
 
@@ -41,8 +42,10 @@ export function BalanceSheetPage() {
     inventoryApi.branches()
       .then((result) => {
         if (!active) return;
-        setBranches(result);
-        setBranchId((current) => result.some((branch) => branch.id === current) ? current : (result[0]?.id ?? ""));
+        const activeBranches = result.filter((branch) => branch.is_active);
+        setBranches(activeBranches);
+        setBranchId((current) => activeBranches.some((branch) => branch.id === current) ? current : (activeBranches[0]?.id ?? ""));
+        if (activeBranches.length === 0) setIsLoading(false);
       })
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Could not load branches."); });
     return () => { active = false; };
@@ -72,11 +75,11 @@ export function BalanceSheetPage() {
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             {user.role === "admin" ? (
-              <SelectField value={branchId} onChange={(event) => setBranchId(event.target.value)} aria-label="Branch">
+              <SelectField value={branchId} onChange={(event) => { setBranchId(event.target.value); setReport(null); setError(null); setIsLoading(true); }} aria-label="Branch">
                 {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
               </SelectField>
             ) : null}
-            <Input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} aria-label="Report date" />
+            <Input type="date" value={reportDate} onChange={(event) => { setReportDate(event.target.value); setReport(null); setError(null); setIsLoading(true); }} aria-label="Report date" />
             <Button variant="outline" onClick={() => window.print()}><Printer />Print</Button>
           </div>
         }
@@ -126,7 +129,7 @@ export function BalanceSheetPage() {
             <CardHeader><CardTitle>Accounting note</CardTitle></CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
-                Unassigned business-wide expenses are included in this branch view. The zero balance difference is arithmetic, not an independent reconciliation: owner contributions and withdrawals are not recorded, and loan accounts are not supported.
+                Unassigned expenses are excluded from this branch view. The zero balance difference is arithmetic, not an independent reconciliation: owner contributions and withdrawals are not recorded, and loan accounts are not supported.
               </p>
             </CardContent>
           </Card>

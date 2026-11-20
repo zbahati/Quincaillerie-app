@@ -13,7 +13,12 @@ async function context(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const accounts = await listBusinessCashAccounts(await context(request));
+    const rawBranchId = request.nextUrl.searchParams.get("branchId");
+    const branchId = rawBranchId === "unassigned" ? null : rawBranchId;
+    if (branchId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(branchId)) {
+      throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+    }
+    const accounts = await listBusinessCashAccounts(await context(request), branchId);
     return jsonResponse({ accounts: accounts.map((account) => ({
       id: account.id,
       business_id: account.businessId,

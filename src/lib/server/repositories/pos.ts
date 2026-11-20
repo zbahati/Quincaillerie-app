@@ -255,9 +255,9 @@ export async function checkoutPosSale(
     const customer = await client.query<{ name: string; creditLimit: string }>(
       `SELECT name, credit_limit::text AS "creditLimit"
        FROM customers
-       WHERE business_id = $1 AND id = $2 AND is_active = TRUE
+       WHERE business_id = $1 AND id = $2 AND branch_id = $3 AND is_active = TRUE
        FOR SHARE`,
-      [input.businessId, input.customerId],
+      [input.businessId, input.customerId, input.branchId],
     );
     if (customer.rowCount !== 1) {
       throw new PosRuleError(400, "customer_not_found", "Select an active customer from this business.");
@@ -280,8 +280,8 @@ export async function checkoutPosSale(
                ), 0)::text AS outstanding
          FROM customer_debts cd
          JOIN sales s ON s.business_id = cd.business_id AND s.id = cd.sale_id
-         WHERE cd.business_id = $1 AND cd.customer_id = $2`,
-        [input.businessId, input.customerId],
+         WHERE cd.business_id = $1 AND cd.customer_id = $2 AND s.branch_id = $3`,
+        [input.businessId, input.customerId, input.branchId],
       );
       const outstanding = Number(debt.rows[0]?.outstanding ?? "0");
       const creditLimit = Number(customer.rows[0].creditLimit);

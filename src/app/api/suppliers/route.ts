@@ -1,5 +1,6 @@
 import {
   authenticatedRelationshipContext,
+  parseRelationshipBranchId,
   supplierDto,
 } from "@/app/api/relationships-shared";
 import {
@@ -18,7 +19,8 @@ import type { NextRequest } from "next/server";
 export async function GET(request: NextRequest) {
   try {
     const context = await authenticatedRelationshipContext(request);
-    const suppliers = await listBusinessSuppliers(context);
+    const branchId = parseRelationshipBranchId(request.nextUrl.searchParams.get("branchId"));
+    const suppliers = await listBusinessSuppliers(context, branchId);
     return jsonResponse({ suppliers: suppliers.map(supplierDto) });
   } catch (cause) {
     return handleAuthRouteError(cause);

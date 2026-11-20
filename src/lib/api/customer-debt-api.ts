@@ -2,6 +2,7 @@ import { invalidResponse, isRecord, requestJson } from "@/lib/api/http-client";
 
 export interface CustomerDebt {
   id: string;
+  branch_id: string;
   customer_id: string;
   customer_name: string;
   sale_id: string;
@@ -28,6 +29,7 @@ export interface CustomerStatement {
     name: string;
     phone: string | null;
     address: string | null;
+    branch_id: string | null;
     customer_type: "individual" | "business";
     credit_limit: number;
   };
@@ -42,8 +44,8 @@ function safeInteger(value: unknown): value is number {
 }
 
 export const customerDebtApi = {
-  async list(): Promise<CustomerDebt[]> {
-    const value = await requestJson("/api/customer-debt");
+  async list(branchId: string): Promise<CustomerDebt[]> {
+    const value = await requestJson(`/api/customer-debt?branchId=${encodeURIComponent(branchId)}`);
     if (!isRecord(value) || !Array.isArray(value.debts)) {
       throw invalidResponse("The service returned invalid customer debts.");
     }
@@ -51,6 +53,7 @@ export const customerDebtApi = {
       if (
         !isRecord(debt) ||
         typeof debt.id !== "string" ||
+        typeof debt.branch_id !== "string" ||
         typeof debt.customer_id !== "string" ||
         typeof debt.customer_name !== "string" ||
         typeof debt.sale_id !== "string" ||
@@ -65,7 +68,7 @@ export const customerDebtApi = {
       return debt as unknown as CustomerDebt;
     });
   },
-  async repay(debtId: string, input: { paymentMethod: "cash" | "mtn_mobile_money" | "airtel_money" | "bank_transfer"; amount: number }): Promise<{ id: string; customer_name: string; payment_method: string; amount: number; balance_due: number }> {
+  async repay(debtId: string, input: { branchId: string; paymentMethod: "cash" | "mtn_mobile_money" | "airtel_money" | "bank_transfer"; amount: number }): Promise<{ id: string; customer_name: string; payment_method: string; amount: number; balance_due: number }> {
     const value = await requestJson(`/api/customer-debt/${encodeURIComponent(debtId)}/payment`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -75,8 +78,8 @@ export const customerDebtApi = {
     }
     return value.payment as unknown as { id: string; customer_name: string; payment_method: string; amount: number; balance_due: number };
   },
-  async statement(customerId: string): Promise<CustomerStatement> {
-    const value = await requestJson(`/api/customers/${encodeURIComponent(customerId)}/statement`);
+  async statement(customerId: string, branchId: string): Promise<CustomerStatement> {
+    const value = await requestJson(`/api/customers/${encodeURIComponent(customerId)}/statement?branchId=${encodeURIComponent(branchId)}`);
     if (!isRecord(value)) {
       throw invalidResponse("The service returned an invalid customer statement.");
     }

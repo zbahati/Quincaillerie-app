@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { FileText, LoaderCircle, Pencil, Plus, Search, Save, UserRound, X } from "lucide-react";
 
 import { customersApi, type Customer } from "@/lib/api/relationships-api";
+import { inventoryApi, type InventoryBranch } from "@/lib/api/inventory-api";
 import { customerDebtApi, type CustomerStatement } from "@/lib/api/customer-debt-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { useAuthentication } from "@/modules/auth/auth-gate";
 type CustomerType = Customer["customer_type"];
 
 interface CustomerForm {
+  branchId: string;
   name: string;
   phone: string;
   address: string;
@@ -33,6 +35,7 @@ interface CustomerForm {
 }
 
 const EMPTY_FORM: CustomerForm = {
+  branchId: "",
   name: "",
   phone: "",
   address: "",
@@ -78,6 +81,7 @@ function formatMoney(scaledAmount: number): string {
 
 function formFromCustomer(customer: Customer): CustomerForm {
   return {
+    branchId: customer.branch_id ?? "",
     name: customer.name,
     phone: customer.phone ?? "",
     address: customer.address ?? "",
@@ -91,6 +95,10 @@ export function CustomersPage() {
   const { user, permissions } = useAuthentication();
   const canReadCustomers = user.role === "admin" || permissions.includes("customers.read");
   const canManageCustomers = user.role === "admin" || permissions.includes("customers.manage");
+  const [branches, setBranches] = useState<InventoryBranch[]>([]);
+  const [branchScope, setBranchScope] = useState(
+    user.role === "manager" ? user.branch_id ?? "" : "",
+  );
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [form, setForm] = useState<CustomerForm>(EMPTY_FORM);
   const [search, setSearch] = useState("");
@@ -103,15 +111,37 @@ export function CustomersPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!canReadCustomers) {
+    if (user.role !== "admin") return;
+    let active = true;
+    inventoryApi.branches()
+      .then((result) => {
+        if (!active) return;
+        const activeBranches = result.filter((branch) => branch.is_active);
+        setBranches(activeBranches);
+        setBranchScope((current) =>
+          current === "unassigned" || activeBranches.some((branch) => branch.id === current)
+            ? current
+            : activeBranches[0]?.id ?? "unassigned",
+        );
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load branches. ${errorText(cause)}`);
+      });
+    return () => { active = false; };
+  }, [user.role]);
+
+  useEffect(() => {
+    if (!canReadCustomers || !branchScope) {
       return;
     }
 
     let active = true;
-    customersApi.list()
+    customersApi.list(branchScope === "unassigned" ? null : branchScope)
       .then((result) => {
         if (active) {
           setCustomers(result);
+          setStatementCustomerId(null);
+          setStatement(null);
         }
       })
       .catch((cause: unknown) => {
@@ -128,17 +158,25 @@ export function CustomersPage() {
     return () => {
       active = false;
     };
-  }, [canReadCustomers]);
+  }, [branchScope, canReadCustomers]);
 
   function resetForm() {
     setEditingCustomerId(null);
-    setForm(EMPTY_FORM);
+    setForm({
+      ...EMPTY_FORM,
+      branchId: branchScope !== "unassigned" ? branchScope : "",
+    });
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const creditLimit = parseCreditLimit(form.creditLimit);
+    const assignedBranchId = form.branchId || (branchScope !== "unassigned" ? branchScope : "");
     if (!canManageCustomers || !form.name.trim()) {
+      return;
+    }
+    if (!assignedBranchId) {
+      setError("Select a branch before saving this customer.");
       return;
     }
     if (creditLimit === null) {
@@ -149,6 +187,7 @@ export function CustomersPage() {
     setError(null);
     setIsSaving(true);
     const fields = {
+      branchId: assignedBranchId,
       name: form.name.trim(),
       phone: form.phone.trim() || null,
       address: form.address.trim() || null,
@@ -188,7 +227,7 @@ export function CustomersPage() {
 
   function editCustomer(customer: Customer) {
     setEditingCustomerId(customer.id);
-    setForm(formFromCustomer(customer));
+    setForm({ ...formFromCustomer(customer), branchId: customer.branch_id ?? "" });
     setError(null);
   }
 
@@ -198,7 +237,7 @@ export function CustomersPage() {
     setIsLoadingStatement(true);
     setError(null);
     try {
-      setStatement(await customerDebtApi.statement(customer.id));
+      setStatement(await customerDebtApi.statement(customer.id, branchScope));
     } catch (cause) {
       setError(`Could not load the customer statement. ${errorText(cause)}`);
     } finally {
@@ -215,7 +254,26 @@ export function CustomersPage() {
     <PageHeader
       eyebrow="Relationships"
       title="Customers"
-      description="Keep customer contact details and credit limits organized for your business."
+      description="Manage customer contacts and credit limits separately for each branch."
+      actions={user.role === "admin" ? (
+        <SelectField
+          value={branchScope}
+          aria-label="Customer branch"
+          onChange={(event) => {
+            setBranchScope(event.target.value);
+            setIsLoadingCustomers(true);
+            setCustomers([]);
+            setEditingCustomerId(null);
+            setStatementCustomerId(null);
+            setStatement(null);
+            setForm(EMPTY_FORM);
+            setError(null);
+          }}
+        >
+          {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+          <option value="unassigned">Unassigned records</option>
+        </SelectField>
+      ) : undefined}
     />
   );
 
@@ -243,7 +301,9 @@ export function CustomersPage() {
                 <CardHeader>
                   <CardTitle>{editingCustomerId ? "Edit customer" : "Add customer"}</CardTitle>
                   <CardDescription>
-                    Customer records and credit limits are managed for your business.
+                    {branchScope === "unassigned"
+                      ? "Assign an existing unassigned customer to a branch to make it available there."
+                      : "New customers are available only in the selected branch."}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -259,6 +319,22 @@ export function CustomersPage() {
                         placeholder="e.g. Aline Mukamana"
                       />
                     </div>
+                    {user.role === "admin" &&
+                    editingCustomerId &&
+                    customers.find((customer) => customer.id === editingCustomerId)?.branch_id === null ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="customer-branch-assignment">Assign to branch</Label>
+                        <SelectField
+                          id="customer-branch-assignment"
+                          value={form.branchId}
+                          onChange={(event) => setForm((current) => ({ ...current, branchId: event.target.value }))}
+                          required
+                        >
+                          <option value="">Select branch</option>
+                          {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                        </SelectField>
+                      </div>
+                    ) : null}
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="customer-type">Customer type</Label>
@@ -394,16 +470,18 @@ export function CustomersPage() {
                           </p>
                         </div>
                         <div className="flex shrink-0 gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={isLoadingStatement}
-                            onClick={() => void viewStatement(customer)}
-                          >
-                            <FileText />
-                            Statement
-                          </Button>
+                          {customer.branch_id && branchScope !== "unassigned" ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={isLoadingStatement}
+                              onClick={() => void viewStatement(customer)}
+                            >
+                              <FileText />
+                              Statement
+                            </Button>
+                          ) : null}
                           {canManageCustomers ? (
                             <Button
                               type="button"

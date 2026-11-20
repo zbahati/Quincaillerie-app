@@ -12,6 +12,7 @@ import { requirePermission } from "../auth/authorization";
 import { AuthServiceError } from "../auth/errors";
 import { getDatabasePool } from "../db/pool";
 import { withTransaction } from "../db/transaction";
+import { findBranchForBusiness } from "../repositories/branches";
 import { recordAuditLog } from "../repositories/audit-logs";
 import {
   createCustomer,
@@ -22,9 +23,54 @@ import {
   updateSupplier,
 } from "../repositories/relationships";
 
-export async function listBusinessSuppliers(context: AuthenticatedContext) {
+async function resolveRelationshipBranch(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+  allowUnassigned = false,
+): Promise<string | null> {
+  if (context.role === "manager") {
+    if (!context.branchId || requestedBranchId !== context.branchId) {
+      throw new AuthServiceError(403, "forbidden", "You cannot access this branch.");
+    }
+    return context.branchId;
+  }
+
+  if (requestedBranchId === null) {
+    if (!allowUnassigned) {
+      throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+    }
+    return null;
+  }
+
+  const branch = await findBranchForBusiness(
+    getDatabasePool(),
+    context.businessId,
+    requestedBranchId,
+  );
+  if (!branch || !branch.isActive) {
+    throw new AuthServiceError(404, "branch_not_found", "The selected branch is unavailable.");
+  }
+  return branch.id;
+}
+
+async function resolveAssignedRelationshipBranch(
+  context: AuthenticatedContext,
+  requestedBranchId: string,
+): Promise<string> {
+  const branchId = await resolveRelationshipBranch(context, requestedBranchId);
+  if (!branchId) {
+    throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+  }
+  return branchId;
+}
+
+export async function listBusinessSuppliers(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+) {
   requirePermission(context, "suppliers.read");
-  return listSuppliers(getDatabasePool(), context.businessId);
+  const branchId = await resolveRelationshipBranch(context, requestedBranchId, true);
+  return listSuppliers(getDatabasePool(), context.businessId, branchId);
 }
 
 export async function createBusinessSupplier(
@@ -32,8 +78,9 @@ export async function createBusinessSupplier(
   input: SupplierCreateInput,
 ) {
   requirePermission(context, "suppliers.manage");
+  const branchId = await resolveAssignedRelationshipBranch(context, input.branchId);
   return withTransaction(async (client) => {
-    const supplier = await createSupplier(client, context.businessId, input);
+    const supplier = await createSupplier(client, context.businessId, branchId, input);
     await recordAuditLog(client, {
       businessId: context.businessId,
       userId: context.userId,
@@ -52,8 +99,16 @@ export async function updateBusinessSupplier(
   input: SupplierUpdateInput,
 ) {
   requirePermission(context, "suppliers.manage");
+  const branchId = await resolveAssignedRelationshipBranch(context, input.branchId);
   return withTransaction(async (client) => {
-    const supplier = await updateSupplier(client, context.businessId, supplierId, input);
+    const supplier = await updateSupplier(
+      client,
+      context.businessId,
+      supplierId,
+      branchId,
+      context.role === "admin",
+      input,
+    );
     if (!supplier) {
       throw new AuthServiceError(
         404,
@@ -73,9 +128,13 @@ export async function updateBusinessSupplier(
   });
 }
 
-export async function listBusinessCustomers(context: AuthenticatedContext) {
+export async function listBusinessCustomers(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+) {
   requirePermission(context, "customers.read");
-  return listCustomers(getDatabasePool(), context.businessId);
+  const branchId = await resolveRelationshipBranch(context, requestedBranchId, true);
+  return listCustomers(getDatabasePool(), context.businessId, branchId);
 }
 
 export async function createBusinessCustomer(
@@ -83,8 +142,9 @@ export async function createBusinessCustomer(
   input: CustomerCreateInput,
 ) {
   requirePermission(context, "customers.manage");
+  const branchId = await resolveAssignedRelationshipBranch(context, input.branchId);
   return withTransaction(async (client) => {
-    const customer = await createCustomer(client, context.businessId, input);
+    const customer = await createCustomer(client, context.businessId, branchId, input);
     await recordAuditLog(client, {
       businessId: context.businessId,
       userId: context.userId,
@@ -107,8 +167,16 @@ export async function updateBusinessCustomer(
   input: CustomerUpdateInput,
 ) {
   requirePermission(context, "customers.manage");
+  const branchId = await resolveAssignedRelationshipBranch(context, input.branchId);
   return withTransaction(async (client) => {
-    const customer = await updateCustomer(client, context.businessId, customerId, input);
+    const customer = await updateCustomer(
+      client,
+      context.businessId,
+      customerId,
+      branchId,
+      context.role === "admin",
+      input,
+    );
     if (!customer) {
       throw new AuthServiceError(
         404,

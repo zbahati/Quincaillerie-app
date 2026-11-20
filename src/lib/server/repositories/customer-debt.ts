@@ -8,6 +8,7 @@ export type CustomerDebtExecutor = Pool | PoolClient;
 
 export interface CustomerDebtRecord {
   id: string;
+  branchId: string;
   customerId: string;
   customerName: string;
   saleId: string;
@@ -36,6 +37,7 @@ export interface CustomerStatementRecord {
     address: string | null;
     customerType: "individual" | "business";
     creditLimit: number;
+    branchId: string | null;
   };
   totalSales: number;
   totalPayments: number;
@@ -61,6 +63,7 @@ function safeInteger(value: string, field: string): number {
 export async function listCustomerDebts(
   executor: CustomerDebtExecutor,
   businessId: string,
+  branchId: string,
 ): Promise<CustomerDebtRecord[]> {
   const result = await executor.query<{
     id: string;
@@ -71,6 +74,7 @@ export async function listCustomerDebts(
     originalAmount: string;
     amountPaid: string;
     createdAt: Date;
+    branchId: string;
   }>(
     `SELECT d.id, d.customer_id AS "customerId", c.name AS "customerName",
             d.sale_id AS "saleId", s.transaction_number AS "transactionNumber",
@@ -86,19 +90,21 @@ export async function listCustomerDebts(
               FROM customer_debt_payments dp
               WHERE dp.business_id = d.business_id AND dp.debt_id = d.id
             ), 0)::text AS "amountPaid",
-            d.created_at AS "createdAt"
+            d.created_at AS "createdAt",
+            s.branch_id AS "branchId"
      FROM customer_debts d
      JOIN customers c ON c.id = d.customer_id AND c.business_id = d.business_id
      JOIN sales s ON s.id = d.sale_id AND s.business_id = d.business_id
-     WHERE d.business_id = $1
+     WHERE d.business_id = $1 AND s.branch_id = $2 AND c.branch_id = s.branch_id
      ORDER BY d.created_at DESC, d.id`,
-    [businessId],
+    [businessId, branchId],
   );
   return result.rows.map((row) => {
     const amountPaid = safeInteger(row.amountPaid, "customer repayment");
     const originalAmount = safeInteger(row.originalAmount, "customer debt");
     return {
       id: row.id,
+      branchId: row.branchId,
       customerId: row.customerId,
       customerName: row.customerName,
       saleId: row.saleId,
@@ -115,6 +121,7 @@ export async function recordCustomerDebtPayment(
   client: PoolClient,
   businessId: string,
   debtId: string,
+  branchId: string,
   input: CustomerDebtPaymentInput,
 ): Promise<{ paymentId: string; customerName: string; balanceDue: number }> {
   const debt = await client.query<{
@@ -133,9 +140,10 @@ export async function recordCustomerDebtPayment(
      FROM customer_debts d
      JOIN customers c ON c.id = d.customer_id AND c.business_id = d.business_id
      JOIN sales s ON s.id = d.sale_id AND s.business_id = d.business_id
-     WHERE d.business_id = $1 AND d.id = $2
+     WHERE d.business_id = $1 AND d.id = $2 AND s.branch_id = $3
+       AND c.branch_id = s.branch_id
      FOR UPDATE OF d`,
-    [businessId, debtId],
+    [businessId, debtId, branchId],
   );
   if (debt.rowCount !== 1) {
     throw new CustomerDebtRuleError(404, "customer_debt_not_found", "The customer debt is unavailable.");
@@ -176,11 +184,12 @@ export async function getCustomerStatement(
     name: string;
     phone: string | null;
     address: string | null;
+    branchId: string | null;
     customerType: "individual" | "business";
     creditLimit: string;
   }>(
-    `SELECT id, name, phone, address, customer_type AS "customerType",
-            credit_limit::text AS "creditLimit"
+    `SELECT id, name, phone, address, branch_id AS "branchId",
+            customer_type AS "customerType", credit_limit::text AS "creditLimit"
      FROM customers
      WHERE business_id = $1 AND id = $2`,
     [businessId, customerId],
@@ -203,8 +212,9 @@ export async function getCustomerStatement(
             s.total::text AS amount, s.created_at AS "createdAt"
      FROM sales s
      WHERE s.business_id = $1 AND s.customer_id = $2 AND s.status = 'completed'
+       AND ($3::uuid IS NULL OR s.branch_id = $3)
      ORDER BY s.created_at, s.id`,
-    [businessId, customerId],
+    [businessId, customerId, row.branchId],
   );
   for (const sale of sales.rows) {
     const amount = safeInteger(sale.amount, "sale total");
@@ -295,6 +305,7 @@ export async function getCustomerStatement(
   return {
     customer: {
       id: row.id,
+      branchId: row.branchId,
       name: row.name,
       phone: row.phone,
       address: row.address,

@@ -11,12 +11,17 @@ import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/shared/page-header";
 import { SelectField } from "@/components/shared/select-field";
 import { useAuthentication } from "@/modules/auth/auth-gate";
+import { inventoryApi, type InventoryBranch } from "@/lib/api/inventory-api";
 
 const categories = ["rent","electricity","transport","salaries","internet","repairs","security","other"];
 const methods = [
   ["cash","Cash"], ["mtn_mobile_money","MTN Mobile Money"],
   ["airtel_money","Airtel Money"], ["bank_transfer","Bank transfer"],
 ] as const;
+
+function errorText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 function parseMoney(value: string): number | null {
   const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(value.trim());
@@ -36,6 +41,10 @@ export function ExpensesPage() {
   const { user, permissions } = useAuthentication();
   const canRead = user.role === "admin" || permissions.includes("expenses.read");
   const canManage = user.role === "admin" || permissions.includes("expenses.manage");
+  const [branches, setBranches] = useState<InventoryBranch[]>([]);
+  const [branchScope, setBranchScope] = useState(
+    user.role === "manager" ? user.branch_id ?? "" : "",
+  );
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [category, setCategory] = useState("other");
@@ -50,9 +59,30 @@ export function ExpensesPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!canRead) { return; }
+    if (user.role !== "admin") return;
     let active = true;
-    Promise.all([ledgerApi.accounts(), ledgerApi.expenses()])
+    inventoryApi.branches()
+      .then((result) => {
+        if (!active) return;
+        const activeBranches = result.filter((branch) => branch.is_active);
+        setBranches(activeBranches);
+        setBranchScope((current) =>
+          current === "unassigned" || activeBranches.some((branch) => branch.id === current)
+            ? current
+            : activeBranches[0]?.id ?? "unassigned",
+        );
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load branches. ${errorText(cause)}`);
+      });
+    return () => { active = false; };
+  }, [user.role]);
+
+  useEffect(() => {
+    if (!canRead || !branchScope) { return; }
+    let active = true;
+    const branchId = branchScope === "unassigned" ? null : branchScope;
+    Promise.all([ledgerApi.accounts(branchId), ledgerApi.expenses(branchId)])
       .then(([accountResult, expenseResult]) => {
         if (!active) return;
         setAccounts(accountResult.filter((account) => account.is_active));
@@ -61,7 +91,7 @@ export function ExpensesPage() {
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Could not load expenses."); })
       .finally(() => { if (active) setIsLoading(false); });
     return () => { active = false; };
-  }, [canRead]);
+  }, [branchScope, canRead]);
 
   const matchingAccounts = accounts.filter((account) =>
     (paymentMethod === "cash" && account.account_type === "cash_drawer") ||
@@ -75,14 +105,14 @@ export function ExpensesPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const scaled = parseMoney(amount);
-    if (!scaled || !accountId || !description.trim()) {
+    if (!scaled || !accountId || !description.trim() || !branchScope || branchScope === "unassigned") {
       setError("Select an opened account and enter a valid amount and description.");
       return;
     }
     setError(null); setNotice(null); setIsSaving(true);
     try {
       await ledgerApi.createExpense({
-        branchId: matchingAccounts.find((account) => account.id === accountId)?.branch_id ?? null,
+        branchId: branchScope,
         category,
         amount: scaled,
         expenseDate,
@@ -92,7 +122,7 @@ export function ExpensesPage() {
         responsibleName: user.full_name,
       });
       setAmount(""); setDescription(""); setNotice("Expense and cash movement recorded.");
-      setExpenses((await ledgerApi.expenses()).items);
+      setExpenses((await ledgerApi.expenses(branchScope)).items);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not record expense.");
     } finally { setIsSaving(false); }
@@ -100,7 +130,28 @@ export function ExpensesPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <PageHeader eyebrow="Operations" title="Expenses" description="Record account-backed operating costs." />
+      <PageHeader
+        eyebrow="Operations"
+        title="Expenses"
+        description="Record and review expenses for one branch at a time."
+        actions={user.role === "admin" ? (
+          <SelectField
+            value={branchScope}
+            aria-label="Expense branch"
+            onChange={(event) => {
+              setBranchScope(event.target.value);
+              setIsLoading(true);
+              setAccounts([]);
+              setExpenses([]);
+              setAccountId("");
+              setError(null);
+            }}
+          >
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            <option value="unassigned">Unassigned expenses</option>
+          </SelectField>
+        ) : undefined}
+      />
       {error ? <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</div> : null}
       {notice ? <div role="status" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">{notice}</div> : null}
       <div className="grid gap-6 xl:grid-cols-[22rem_1fr]">
@@ -113,7 +164,7 @@ export function ExpensesPage() {
               <div className="space-y-2"><Label>Payment method</Label><SelectField value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value); setAccountId(""); }}>{methods.map(([value,label]) => <option key={value} value={value}>{label}</option>)}</SelectField></div>
               <div className="space-y-2"><Label>Cash account</Label><SelectField value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select opened account</option>{matchingAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {formatMoney(account.available_balance ?? 0)}</option>)}</SelectField></div>
               <div className="space-y-2"><Label>Description</Label><Input value={description} maxLength={1000} onChange={(event) => setDescription(event.target.value)} /></div>
-              <Button type="submit" disabled={isSaving || !accountId}><Receipt />{isSaving ? "Recording..." : "Record expense"}</Button>
+              <Button type="submit" disabled={isSaving || !accountId || !branchScope || branchScope === "unassigned"}><Receipt />{isSaving ? "Recording..." : "Record expense"}</Button>
             </form>
           </CardContent></Card>
         ) : null}

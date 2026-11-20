@@ -19,6 +19,7 @@ export const supplierIdSchema = recordIdSchema;
 export const customerIdSchema = recordIdSchema;
 
 export const supplierCreateSchema = z.object({
+  branchId: recordIdSchema,
   name: nameSchema,
   contactPerson: nullableText(160),
   phone: nullableText(80),
@@ -32,6 +33,7 @@ export const supplierUpdateSchema = supplierCreateSchema.extend({
 });
 
 export const customerCreateSchema = z.object({
+  branchId: recordIdSchema,
   name: nameSchema,
   phone: nullableText(80),
   address: nullableText(500),

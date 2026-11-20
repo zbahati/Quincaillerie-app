@@ -42,12 +42,13 @@ export interface CashTransfer {
 }
 
 export const ledgerApi = {
-  async accounts(): Promise<CashAccount[]> {
-    const value = await requestJson("/api/cash-accounts");
+  async accounts(branchId: string | null): Promise<CashAccount[]> {
+    const scope = branchId ?? "unassigned";
+    const value = await requestJson(`/api/cash-accounts?branchId=${encodeURIComponent(scope)}`);
     if (!isRecord(value) || !Array.isArray(value.accounts)) throw invalidResponse("Invalid cash accounts.");
     return value.accounts as unknown as CashAccount[];
   },
-  async createAccount(input: { branchId: string | null; accountType: string; name: string }): Promise<CashAccount> {
+  async createAccount(input: { branchId: string; accountType: string; name: string }): Promise<CashAccount> {
     const value = await requestJson("/api/cash-accounts", { method: "POST", body: JSON.stringify(input) });
     if (!isRecord(value) || !isRecord(value.account)) throw invalidResponse("Invalid cash account response.");
     return value.account as unknown as CashAccount;
@@ -60,15 +61,29 @@ export const ledgerApi = {
     if (!isRecord(value) || !isRecord(value.account)) throw invalidResponse("Invalid opening response.");
     return value.account as unknown as CashAccount;
   },
-  async expenses(offset = 0, limit = 20): Promise<{ items: Expense[]; total_count: number }> {
-    const value = await requestJson(`/api/expenses?offset=${offset}&limit=${limit}`);
+  async updateAccount(
+    accountId: string,
+    input: { branchId?: string; isActive?: boolean },
+  ): Promise<void> {
+    await requestJson(`/api/cash-accounts/${encodeURIComponent(accountId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+  async expenses(
+    branchId: string | null,
+    offset = 0,
+    limit = 20,
+  ): Promise<{ items: Expense[]; total_count: number }> {
+    const scope = branchId ?? "unassigned";
+    const value = await requestJson(`/api/expenses?branchId=${encodeURIComponent(scope)}&offset=${offset}&limit=${limit}`);
     if (!isRecord(value) || !Array.isArray(value.items) || typeof value.total_count !== "number") {
       throw invalidResponse("Invalid expense response.");
     }
     return value as unknown as { items: Expense[]; total_count: number };
   },
   async createExpense(input: {
-    branchId: string | null;
+    branchId: string;
     category: string;
     amount: number;
     expenseDate: string;
@@ -81,20 +96,25 @@ export const ledgerApi = {
     if (!isRecord(value) || !isRecord(value.expense)) throw invalidResponse("Invalid expense response.");
     return value.expense as unknown as Expense;
   },
-  async transfers(): Promise<CashTransfer[]> {
-    const value = await requestJson("/api/cash-transfers");
+  async transfers(branchId: string | null): Promise<CashTransfer[]> {
+    const scope = branchId ?? "unassigned";
+    const value = await requestJson(`/api/cash-transfers?branchId=${encodeURIComponent(scope)}`);
     if (!isRecord(value) || !Array.isArray(value.transfers)) throw invalidResponse("Invalid cash transfers.");
     return value.transfers as unknown as CashTransfer[];
   },
-  async createTransfer(input: { fromAccountId: string; toAccountId: string; amount: number }): Promise<CashTransfer> {
+  async createTransfer(input: { branchId: string; fromAccountId: string; toAccountId: string; amount: number }): Promise<CashTransfer> {
     const value = await requestJson("/api/cash-transfers", { method: "POST", body: JSON.stringify(input) });
     if (!isRecord(value) || !isRecord(value.transfer)) throw invalidResponse("Invalid cash transfer response.");
     return value.transfer as unknown as CashTransfer;
   },
-  async confirmTransfer(transferId: string, confirmationReference: string | null): Promise<CashTransfer> {
+  async confirmTransfer(
+    transferId: string,
+    branchId: string,
+    confirmationReference: string | null,
+  ): Promise<CashTransfer> {
     const value = await requestJson(`/api/cash-transfers/${encodeURIComponent(transferId)}/confirm`, {
       method: "POST",
-      body: JSON.stringify({ confirmationReference }),
+      body: JSON.stringify({ branchId, confirmationReference }),
     });
     if (!isRecord(value) || !isRecord(value.transfer)) throw invalidResponse("Invalid transfer confirmation.");
     return value.transfer as unknown as CashTransfer;

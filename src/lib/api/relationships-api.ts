@@ -3,6 +3,7 @@ import { invalidResponse, isRecord, requestJson } from "@/lib/api/http-client";
 export interface Supplier {
   id: string;
   business_id: string;
+  branch_id: string | null;
   name: string;
   contact_person: string | null;
   phone: string | null;
@@ -15,6 +16,7 @@ export interface Supplier {
 export interface Customer {
   id: string;
   business_id: string;
+  branch_id: string | null;
   name: string;
   phone: string | null;
   address: string | null;
@@ -24,6 +26,7 @@ export interface Customer {
 }
 
 export interface SupplierInput {
+  branchId: string;
   name: string;
   contactPerson: string | null;
   phone: string | null;
@@ -33,6 +36,7 @@ export interface SupplierInput {
 }
 
 export interface CustomerInput {
+  branchId: string;
   name: string;
   phone: string | null;
   address: string | null;
@@ -53,6 +57,7 @@ function parseSupplier(value: unknown): Supplier {
     !isRecord(value) ||
     typeof value.id !== "string" ||
     typeof value.business_id !== "string" ||
+    (value.branch_id !== null && typeof value.branch_id !== "string") ||
     typeof value.name !== "string" ||
     !isNullableString(value.contact_person) ||
     !isNullableString(value.phone) ||
@@ -66,6 +71,7 @@ function parseSupplier(value: unknown): Supplier {
   return {
     id: value.id,
     business_id: value.business_id,
+    branch_id: value.branch_id,
     name: value.name,
     contact_person: value.contact_person,
     phone: value.phone,
@@ -81,6 +87,7 @@ function parseCustomer(value: unknown): Customer {
     !isRecord(value) ||
     typeof value.id !== "string" ||
     typeof value.business_id !== "string" ||
+    (value.branch_id !== null && typeof value.branch_id !== "string") ||
     typeof value.name !== "string" ||
     !isNullableString(value.phone) ||
     !isNullableString(value.address) ||
@@ -93,6 +100,7 @@ function parseCustomer(value: unknown): Customer {
   return {
     id: value.id,
     business_id: value.business_id,
+    branch_id: value.branch_id,
     name: value.name,
     phone: value.phone,
     address: value.address,
@@ -125,8 +133,13 @@ function parseRecord<T>(
 }
 
 export const suppliersApi = {
-  async list(): Promise<Supplier[]> {
-    return parseList(await requestJson("/api/suppliers"), "suppliers", parseSupplier);
+  async list(branchId: string | null): Promise<Supplier[]> {
+    const scope = branchId ?? "unassigned";
+    return parseList(
+      await requestJson(`/api/suppliers?branchId=${encodeURIComponent(scope)}`),
+      "suppliers",
+      parseSupplier,
+    );
   },
 
   async create(input: SupplierInput): Promise<Supplier> {
@@ -153,8 +166,13 @@ export const suppliersApi = {
 };
 
 export const customersApi = {
-  async list(): Promise<Customer[]> {
-    return parseList(await requestJson("/api/customers"), "customers", parseCustomer);
+  async list(branchId: string | null): Promise<Customer[]> {
+    const scope = branchId ?? "unassigned";
+    return parseList(
+      await requestJson(`/api/customers?branchId=${encodeURIComponent(scope)}`),
+      "customers",
+      parseCustomer,
+    );
   },
 
   async create(input: CustomerInput): Promise<Customer> {

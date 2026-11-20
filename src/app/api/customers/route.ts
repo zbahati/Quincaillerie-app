@@ -1,6 +1,7 @@
 import {
   authenticatedRelationshipContext,
   customerDto,
+  parseRelationshipBranchId,
 } from "@/app/api/relationships-shared";
 import {
   handleAuthRouteError,
@@ -18,7 +19,8 @@ import type { NextRequest } from "next/server";
 export async function GET(request: NextRequest) {
   try {
     const context = await authenticatedRelationshipContext(request);
-    const customers = await listBusinessCustomers(context);
+    const branchId = parseRelationshipBranchId(request.nextUrl.searchParams.get("branchId"));
+    const customers = await listBusinessCustomers(context, branchId);
     return jsonResponse({ customers: customers.map(customerDto) });
   } catch (cause) {
     return handleAuthRouteError(cause);

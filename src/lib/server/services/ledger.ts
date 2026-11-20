@@ -11,8 +11,10 @@ import { requirePermission } from "../auth/authorization";
 import { AuthServiceError } from "../auth/errors";
 import { getDatabasePool } from "../db/pool";
 import { withTransaction } from "../db/transaction";
+import { findBranchForBusiness } from "../repositories/branches";
 import { recordAuditLog } from "../repositories/audit-logs";
 import {
+  assignCashAccountBranch,
   createCashAccount,
   createExpense,
   createCashTransfer,
@@ -32,9 +34,53 @@ function raiseLedger(cause: unknown): never {
   throw cause;
 }
 
-export async function listBusinessCashAccounts(context: AuthenticatedContext) {
+async function resolveLedgerBranch(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+  allowUnassigned = false,
+): Promise<string | null> {
+  if (context.role === "manager") {
+    if (!context.branchId || requestedBranchId !== context.branchId) {
+      throw new AuthServiceError(403, "forbidden", "You cannot access this branch.");
+    }
+    return context.branchId;
+  }
+  if (requestedBranchId === null) {
+    if (!allowUnassigned) {
+      throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+    }
+    return null;
+  }
+
+  const branch = await findBranchForBusiness(
+    getDatabasePool(),
+    context.businessId,
+    requestedBranchId,
+  );
+  if (!branch || !branch.isActive) {
+    throw new AuthServiceError(404, "branch_not_found", "The selected branch is unavailable.");
+  }
+  return branch.id;
+}
+
+async function resolveAssignedLedgerBranch(
+  context: AuthenticatedContext,
+  requestedBranchId: string,
+): Promise<string> {
+  const branchId = await resolveLedgerBranch(context, requestedBranchId);
+  if (!branchId) {
+    throw new AuthServiceError(400, "branch_required", "Select an active branch.");
+  }
+  return branchId;
+}
+
+export async function listBusinessCashAccounts(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+) {
   requirePermission(context, "cash_accounts.balance.read");
-  return listCashAccounts(getDatabasePool(), context.businessId);
+  const branchId = await resolveLedgerBranch(context, requestedBranchId, true);
+  return listCashAccounts(getDatabasePool(), context.businessId, branchId);
 }
 
 export async function createBusinessCashAccount(
@@ -42,9 +88,13 @@ export async function createBusinessCashAccount(
   input: CashAccountCreateInput,
 ) {
   requirePermission(context, "cash_accounts.manage");
+  const branchId = await resolveAssignedLedgerBranch(context, input.branchId);
   try {
     return await withTransaction(async (client) => {
-      const account = await createCashAccount(client, context.businessId, context.userId, input);
+      const account = await createCashAccount(client, context.businessId, context.userId, {
+        ...input,
+        branchId,
+      });
       await recordAuditLog(client, {
         businessId: context.businessId,
         userId: context.userId,
@@ -110,16 +160,63 @@ export async function setBusinessCashAccountActive(
   }
 }
 
-export async function listBusinessExpenses(context: AuthenticatedContext, offset: number, limit: number) {
+export async function updateBusinessCashAccount(
+  context: AuthenticatedContext,
+  accountId: string,
+  input: { branchId?: string; isActive?: boolean },
+) {
+  if (context.role !== "admin") {
+    throw new AuthServiceError(403, "forbidden", "Only an Admin can assign or activate cash accounts.");
+  }
+  requirePermission(context, "cash_accounts.manage");
+  const branchId = input.branchId
+    ? await resolveAssignedLedgerBranch(context, input.branchId)
+    : undefined;
+  try {
+    await withTransaction(async (client) => {
+      if (branchId) {
+        await assignCashAccountBranch(client, context.businessId, accountId, branchId);
+      }
+      if (input.isActive !== undefined) {
+        await setCashAccountActive(client, context.businessId, accountId, input.isActive);
+      }
+      await recordAuditLog(client, {
+        businessId: context.businessId,
+        userId: context.userId,
+        action: "cash_accounts.account_updated",
+        entityType: "cash_account",
+        entityId: accountId,
+        details: {
+          ...(branchId ? { branch_id: branchId } : {}),
+          ...(input.isActive !== undefined ? { is_active: input.isActive } : {}),
+        },
+      });
+    });
+  } catch (cause) {
+    raiseLedger(cause);
+  }
+}
+
+export async function listBusinessExpenses(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+  offset: number,
+  limit: number,
+) {
   requirePermission(context, "expenses.read");
-  return listExpenses(getDatabasePool(), context.businessId, offset, limit);
+  const branchId = await resolveLedgerBranch(context, requestedBranchId, true);
+  return listExpenses(getDatabasePool(), context.businessId, branchId, offset, limit);
 }
 
 export async function createBusinessExpense(context: AuthenticatedContext, input: ExpenseCreateInput) {
   requirePermission(context, "expenses.manage");
+  const branchId = await resolveAssignedLedgerBranch(context, input.branchId);
   try {
     return await withTransaction(async (client) => {
-      const expense = await createExpense(client, context.businessId, context.userId, input);
+      const expense = await createExpense(client, context.businessId, context.userId, {
+        ...input,
+        branchId,
+      });
       await recordAuditLog(client, {
         businessId: context.businessId,
         userId: context.userId,
@@ -140,19 +237,27 @@ export async function createBusinessExpense(context: AuthenticatedContext, input
   }
 }
 
-export async function listBusinessCashTransfers(context: AuthenticatedContext) {
+export async function listBusinessCashTransfers(
+  context: AuthenticatedContext,
+  requestedBranchId: string | null,
+) {
   requirePermission(context, "cash_accounts.balance.read");
-  return listCashTransfers(getDatabasePool(), context.businessId);
+  const branchId = await resolveLedgerBranch(context, requestedBranchId, true);
+  return listCashTransfers(getDatabasePool(), context.businessId, branchId);
 }
 
 export async function createBusinessCashTransfer(
   context: AuthenticatedContext,
-  input: { fromAccountId: string; toAccountId: string; amount: number },
+  input: { branchId: string; fromAccountId: string; toAccountId: string; amount: number },
 ) {
   requirePermission(context, "cash_accounts.manage");
+  const branchId = await resolveAssignedLedgerBranch(context, input.branchId);
   try {
     return await withTransaction(async (client) => {
-      const transfer = await createCashTransfer(client, context.businessId, context.userId, input);
+      const transfer = await createCashTransfer(client, context.businessId, context.userId, {
+        ...input,
+        branchId,
+      });
       await recordAuditLog(client, {
         businessId: context.businessId,
         userId: context.userId,
@@ -175,12 +280,14 @@ export async function createBusinessCashTransfer(
 export async function confirmBusinessCashTransfer(
   context: AuthenticatedContext,
   transferId: string,
+  branchId: string,
   confirmationReference: string | null,
 ) {
   if (context.role !== "admin") {
     throw new AuthServiceError(403, "forbidden", "Only Admin can confirm a cash transfer.");
   }
   requirePermission(context, "cash_accounts.manage");
+  const resolvedBranchId = await resolveAssignedLedgerBranch(context, branchId);
   try {
     return await withTransaction(async (client) => {
       const transfer = await confirmCashTransfer(
@@ -188,6 +295,7 @@ export async function confirmBusinessCashTransfer(
         context.businessId,
         transferId,
         context.userId,
+        resolvedBranchId,
         confirmationReference,
       );
       await recordAuditLog(client, {

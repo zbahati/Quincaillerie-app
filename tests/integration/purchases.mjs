@@ -50,6 +50,7 @@ test("purchase invoices support duplicate confirmation, branch scope and partial
   let branchId;
   let otherBranchId;
   let supplierId;
+  let otherBranchSupplierId;
   let productId;
   let branchCashAccountId;
   let otherBranchCashAccountId;
@@ -126,11 +127,17 @@ test("purchase invoices support duplicate confirmation, branch scope and partial
       );
 
       const supplier = await client.query(
-        `INSERT INTO suppliers (business_id, name)
-         VALUES ($1, $2) RETURNING id`,
-        [business.id, `Purchase Supplier ${unique}`],
+        `INSERT INTO suppliers (business_id, branch_id, name)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [business.id, branch.id, `Purchase Supplier ${unique}`],
       );
       supplierId = supplier.rows[0].id;
+      const otherBranchSupplier = await client.query(
+        `INSERT INTO suppliers (business_id, branch_id, name)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [business.id, otherBranch.id, `Other Branch Supplier ${unique}`],
+      );
+      otherBranchSupplierId = otherBranchSupplier.rows[0].id;
 
       const baseUnit = await client.query(
         `SELECT id FROM units WHERE code = 'pc' LIMIT 1`,
@@ -180,6 +187,16 @@ test("purchase invoices support duplicate confirmation, branch scope and partial
     const purchase = (await first.json()).purchase;
     assert.equal(purchase.subtotal, 120000);
     assert.equal(purchase.status, "pending");
+
+    const wrongBranchSupplier = await postPurchase(request("/api/purchases", managerToken, {
+      method: "POST",
+      body: JSON.stringify({
+        ...createBody,
+        supplierId: otherBranchSupplierId,
+        supplierInvoiceNumber: `OTHER-${unique}`,
+      }),
+    }));
+    assert.equal(wrongBranchSupplier.status, 404);
 
     const duplicate = await postPurchase(request("/api/purchases", adminToken, {
       method: "POST",

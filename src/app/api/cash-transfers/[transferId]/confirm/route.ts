@@ -14,7 +14,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     if (!auth) throw new AuthServiceError(401, "authentication_required", "Sign in to continue.");
     const input = await readJsonBody(request, cashTransferConfirmSchema);
     const { transferId } = await params;
-    const transfer = await confirmBusinessCashTransfer(auth, transferId, input.confirmationReference ?? null);
+    const transfer = await confirmBusinessCashTransfer(
+      auth,
+      transferId,
+      input.branchId,
+      input.confirmationReference ?? null,
+    );
     return jsonResponse({ transfer: {
       id: transfer.id,
       status: transfer.status,

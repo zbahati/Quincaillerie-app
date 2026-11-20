@@ -151,11 +151,10 @@ export function PurchasesPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([purchasesApi.branches(), suppliersApi.list(), purchasesApi.products()])
-      .then(([branchResult, supplierResult, productResult]) => {
+    Promise.all([purchasesApi.branches(), purchasesApi.products()])
+      .then(([branchResult, productResult]) => {
         if (!active) return;
         setBranches(branchResult);
-        setSuppliers(supplierResult.filter((supplier) => supplier.is_active));
         setProducts(productResult);
         setBranchId((current) =>
           branchResult.some((branch) => branch.id === current)
@@ -171,6 +170,19 @@ export function PurchasesPage() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!branchId) return;
+    let active = true;
+    suppliersApi.list(branchId)
+      .then((result) => {
+        if (active) setSuppliers(result.filter((supplier) => supplier.is_active));
+      })
+      .catch((cause) => {
+        if (active) setError(`Could not load branch suppliers. ${errorText(cause)}`);
+      });
+    return () => { active = false; };
+  }, [branchId]);
 
   useEffect(() => {
     if (!branchId || !canRead) return;
@@ -375,7 +387,7 @@ export function PurchasesPage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="purchase-branch">Branch</Label>
-                      <SelectField id="purchase-branch" value={branchId} onChange={(event) => setBranchId(event.target.value)} disabled={user.role === "manager"}>
+                      <SelectField id="purchase-branch" value={branchId} onChange={(event) => { setBranchId(event.target.value); setSupplierId(""); setSuppliers([]); }} disabled={user.role === "manager"}>
                         {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                       </SelectField>
                     </div>

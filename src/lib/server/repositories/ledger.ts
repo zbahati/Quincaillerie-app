@@ -126,7 +126,7 @@ export async function listOpenedCashAccountsForBranch(
        ON o.business_id = a.business_id AND o.account_id = a.id
      WHERE a.business_id = $1 AND a.is_active = TRUE
        AND a.account_type IN ('cash_drawer', 'bank', 'mtn_wallet', 'airtel_wallet')
-       AND (a.branch_id IS NULL OR a.branch_id = $2)
+       AND a.branch_id = $2
      ORDER BY a.account_type, lower(a.name), a.id`,
     [businessId, branchId],
   );
@@ -159,7 +159,7 @@ export async function lockOpenedCashAccountForPayment(
     throw new LedgerRuleError(404, "cash_account_not_found", "The selected cash account is unavailable.");
   }
   const account = result.rows[0];
-  if (account.branchId !== null && account.branchId !== branchId) {
+  if (account.branchId !== branchId) {
     throw new LedgerRuleError(403, "cash_account_branch_mismatch", "The selected cash account is not available to this branch.");
   }
   if (account.accountType !== cashAccountTypeForPaymentMethod(paymentMethod)) {
@@ -170,7 +170,11 @@ export async function lockOpenedCashAccountForPayment(
   }
 }
 
-export async function listCashAccounts(executor: LedgerExecutor, businessId: string): Promise<CashAccountRecord[]> {
+export async function listCashAccounts(
+  executor: LedgerExecutor,
+  businessId: string,
+  branchId: string | null,
+): Promise<CashAccountRecord[]> {
   const result = await executor.query<{
     id: string;
     businessId: string;
@@ -192,9 +196,9 @@ export async function listCashAccounts(executor: LedgerExecutor, businessId: str
      FROM cash_accounts a
      LEFT JOIN users u ON u.business_id = a.business_id AND u.id = a.responsible_user_id
      LEFT JOIN cash_account_openings o ON o.business_id = a.business_id AND o.account_id = a.id
-     WHERE a.business_id = $1
+     WHERE a.business_id = $1 AND a.branch_id IS NOT DISTINCT FROM $2::uuid
      ORDER BY a.is_active DESC, a.account_type, lower(a.name), a.id`,
-    [businessId],
+    [businessId, branchId],
   );
   const accounts: CashAccountRecord[] = [];
   for (const row of result.rows) {
@@ -214,9 +218,6 @@ export async function createCashAccount(
   userId: string,
   input: CashAccountCreateInput,
 ): Promise<CashAccountRecord> {
-  if (input.accountType === "cash_drawer") {
-    // Cash drawers may be business-wide until the later Manager branch-ledger slice.
-  }
   const result = await client.query<{
     id: string;
   }>(
@@ -226,15 +227,15 @@ export async function createCashAccount(
      RETURNING id`,
     [
       businessId,
-      input.accountType === "cash_drawer" ? input.branchId : null,
+      input.branchId,
       input.accountType,
       input.name,
-      input.accountType === "cash_drawer" ? userId : null,
+      userId,
     ],
   );
   const id = result.rows[0]?.id;
   if (!id) throw new Error("PostgreSQL did not return the cash account.");
-  const accounts = await listCashAccounts(client, businessId);
+  const accounts = await listCashAccounts(client, businessId, input.branchId);
   const account = accounts.find((item) => item.id === id);
   if (!account) throw new Error("PostgreSQL did not return the created cash account.");
   return account;
@@ -247,8 +248,8 @@ export async function openCashAccount(
   userId: string,
   input: CashAccountOpeningInput,
 ): Promise<CashAccountRecord> {
-  const account = await client.query<{ id: string; isActive: boolean }>(
-    `SELECT id, is_active AS "isActive"
+  const account = await client.query<{ id: string; branchId: string | null; isActive: boolean }>(
+    `SELECT id, branch_id AS "branchId", is_active AS "isActive"
      FROM cash_accounts
      WHERE business_id = $1 AND id = $2
      FOR UPDATE`,
@@ -272,7 +273,7 @@ export async function openCashAccount(
      VALUES ($1, $2, $3, $4, $4)`,
     [businessId, accountId, input.openingAmount, userId],
   );
-  const accounts = await listCashAccounts(client, businessId);
+  const accounts = await listCashAccounts(client, businessId, account.rows[0].branchId ?? null);
   const updated = accounts.find((item) => item.id === accountId);
   if (!updated) throw new Error("PostgreSQL did not return the opened cash account.");
   return updated;
@@ -295,15 +296,64 @@ export async function setCashAccountActive(
   }
 }
 
+export async function assignCashAccountBranch(
+  client: PoolClient,
+  businessId: string,
+  accountId: string,
+  branchId: string,
+): Promise<void> {
+  const account = await client.query<{ branchId: string | null }>(
+    `SELECT branch_id AS "branchId"
+     FROM cash_accounts
+     WHERE business_id = $1 AND id = $2
+     FOR UPDATE`,
+    [businessId, accountId],
+  );
+  if (account.rowCount !== 1) {
+    throw new LedgerRuleError(404, "cash_account_not_found", "The cash account is unavailable.");
+  }
+  if (account.rows[0].branchId !== null) {
+    throw new LedgerRuleError(
+      409,
+      "cash_account_already_assigned",
+      "A cash account can only be assigned to a branch once.",
+    );
+  }
+  const branch = await client.query(
+    `SELECT id FROM branches
+     WHERE business_id = $1 AND id = $2 AND is_active = TRUE
+     FOR SHARE`,
+    [businessId, branchId],
+  );
+  if (branch.rowCount !== 1) {
+    throw new LedgerRuleError(404, "branch_not_found", "The selected branch is unavailable.");
+  }
+  await client.query(
+    `UPDATE cash_accounts
+     SET branch_id = $3, updated_at = now()
+     WHERE business_id = $1 AND id = $2`,
+    [businessId, accountId, branchId],
+  );
+  await client.query(
+    `UPDATE expenses
+     SET branch_id = $3
+     WHERE business_id = $1 AND cash_account_id = $2 AND branch_id IS NULL`,
+    [businessId, accountId, branchId],
+  );
+}
+
 export async function listExpenses(
   executor: LedgerExecutor,
   businessId: string,
+  branchId: string | null,
   offset: number,
   limit: number,
 ): Promise<{ items: ExpenseRecord[]; totalCount: number }> {
   const count = await executor.query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM expenses WHERE business_id = $1`,
-    [businessId],
+    `SELECT COUNT(*)::text AS count
+     FROM expenses
+     WHERE business_id = $1 AND branch_id IS NOT DISTINCT FROM $2::uuid`,
+    [businessId, branchId],
   );
   const result = await executor.query<{
     id: string;
@@ -323,10 +373,10 @@ export async function listExpenses(
             payment_method AS "paymentMethod", cash_account_id AS "cashAccountId",
             description, responsible_name AS "responsibleName", created_at AS "createdAt"
      FROM expenses
-     WHERE business_id = $1
+     WHERE business_id = $1 AND branch_id IS NOT DISTINCT FROM $2::uuid
      ORDER BY expense_date DESC, created_at DESC, id
-     LIMIT $2 OFFSET $3`,
-    [businessId, limit, offset],
+     LIMIT $3 OFFSET $4`,
+    [businessId, branchId, limit, offset],
   );
   return {
     totalCount: safeInteger(count.rows[0]?.count ?? "0", "expense count"),
@@ -346,9 +396,11 @@ export async function createExpense(
   const account = await client.query<{
     id: string;
     accountType: string;
+    branchId: string | null;
     isActive: boolean;
   }>(
-    `SELECT id, account_type AS "accountType", is_active AS "isActive"
+    `SELECT id, account_type AS "accountType", branch_id AS "branchId",
+            is_active AS "isActive"
      FROM cash_accounts
      WHERE business_id = $1 AND id = $2
      FOR UPDATE`,
@@ -356,6 +408,13 @@ export async function createExpense(
   );
   if (account.rowCount !== 1 || !account.rows[0].isActive) {
     throw new LedgerRuleError(404, "cash_account_not_found", "The selected cash account is unavailable.");
+  }
+  if (!input.branchId || account.rows[0].branchId !== input.branchId) {
+    throw new LedgerRuleError(
+      403,
+      "expense_account_branch_mismatch",
+      "The selected cash account is not available to this branch.",
+    );
   }
   const expectedType =
     input.paymentMethod === "cash" ? "cash_drawer"
@@ -381,7 +440,7 @@ export async function createExpense(
      RETURNING id, created_at AS "createdAt"`,
     [
       businessId,
-      input.branchId ?? null,
+      input.branchId,
       input.category,
       input.amount,
       input.expenseDate,
@@ -404,7 +463,7 @@ export async function createExpense(
   return {
     id,
     businessId,
-    branchId: input.branchId ?? null,
+    branchId: input.branchId,
     category: input.category,
     amount: input.amount,
     expenseDate: input.expenseDate,
@@ -419,6 +478,7 @@ export async function createExpense(
 export async function listCashTransfers(
   executor: LedgerExecutor,
   businessId: string,
+  branchId: string | null,
 ): Promise<CashTransferRecord[]> {
   const result = await executor.query<{
     id: string;
@@ -435,23 +495,31 @@ export async function listCashTransfers(
     confirmationReference: string | null;
     createdAt: Date;
   }>(
-    `SELECT id,
-            from_account_id AS "fromAccountId",
-            to_account_id AS "toAccountId",
-            amount::text AS amount,
-            status,
-            occurred_at AS "occurredAt",
-            initiated_by_user_id AS "initiatedByUserId",
-            confirmed_by_user_id AS "confirmedByUserId",
-            confirmed_at AS "confirmedAt",
-            cancelled_by_user_id AS "cancelledByUserId",
-            cancelled_at AS "cancelledAt",
-            confirmation_reference AS "confirmationReference",
-            created_at AS "createdAt"
-     FROM cash_transfers
-     WHERE business_id = $1
-     ORDER BY occurred_at DESC, created_at DESC, id`,
-    [businessId],
+    `SELECT t.id,
+            t.from_account_id AS "fromAccountId",
+            t.to_account_id AS "toAccountId",
+            t.amount::text AS amount,
+            t.status,
+            t.occurred_at AS "occurredAt",
+            t.initiated_by_user_id AS "initiatedByUserId",
+            t.confirmed_by_user_id AS "confirmedByUserId",
+            t.confirmed_at AS "confirmedAt",
+            t.cancelled_by_user_id AS "cancelledByUserId",
+            t.cancelled_at AS "cancelledAt",
+            t.confirmation_reference AS "confirmationReference",
+            t.created_at AS "createdAt"
+     FROM cash_transfers t
+     JOIN cash_accounts source_account
+       ON source_account.business_id = t.business_id
+      AND source_account.id = t.from_account_id
+     JOIN cash_accounts target_account
+       ON target_account.business_id = t.business_id
+      AND target_account.id = t.to_account_id
+     WHERE t.business_id = $1
+       AND source_account.branch_id IS NOT DISTINCT FROM $2::uuid
+       AND target_account.branch_id IS NOT DISTINCT FROM $2::uuid
+     ORDER BY t.occurred_at DESC, t.created_at DESC, t.id`,
+    [businessId, branchId],
   );
   return result.rows.map((row) => ({
     ...row,
@@ -463,14 +531,14 @@ export async function createCashTransfer(
   client: PoolClient,
   businessId: string,
   userId: string,
-  input: { fromAccountId: string; toAccountId: string; amount: number },
+  input: { branchId: string; fromAccountId: string; toAccountId: string; amount: number },
 ): Promise<CashTransferRecord> {
   if (input.fromAccountId === input.toAccountId) {
     throw new LedgerRuleError(400, "invalid_transfer_accounts", "Select two different accounts.");
   }
   for (const accountId of [input.fromAccountId, input.toAccountId]) {
-    const account = await client.query(
-      `SELECT a.id
+    const account = await client.query<{ id: string; branchId: string | null }>(
+      `SELECT a.id, a.branch_id AS "branchId"
        FROM cash_accounts a
        JOIN cash_account_openings o ON o.business_id = a.business_id AND o.account_id = a.id
        WHERE a.business_id = $1 AND a.id = $2 AND a.is_active = TRUE
@@ -480,6 +548,23 @@ export async function createCashTransfer(
     if (account.rowCount !== 1) {
       throw new LedgerRuleError(400, "transfer_account_unavailable", "Both accounts must be active and opened.");
     }
+  }
+  const accountBranches = await client.query<{ branchId: string | null }>(
+    `SELECT branch_id AS "branchId"
+     FROM cash_accounts
+     WHERE business_id = $1 AND id = ANY($2::uuid[])`,
+    [businessId, [input.fromAccountId, input.toAccountId]],
+  );
+  if (
+    accountBranches.rowCount !== 2 ||
+    accountBranches.rows[0].branchId !== input.branchId ||
+    accountBranches.rows.some((account) => account.branchId !== input.branchId)
+  ) {
+    throw new LedgerRuleError(
+      400,
+      "transfer_branch_mismatch",
+      "Cash transfers are allowed only between accounts assigned to the same branch.",
+    );
   }
   const balance = await accountBalance(client, businessId, input.fromAccountId);
   if (balance === null || input.amount > balance) {
@@ -520,6 +605,7 @@ export async function confirmCashTransfer(
   businessId: string,
   transferId: string,
   userId: string,
+  branchId: string,
   confirmationReference: string | null,
 ): Promise<CashTransferRecord> {
   const transfer = await client.query<{
@@ -558,6 +644,20 @@ export async function confirmCashTransfer(
   );
   if (accountLock.rowCount !== 2) {
     throw new LedgerRuleError(404, "transfer_account_unavailable", "A transfer account is no longer available.");
+  }
+  const accountBranches = await client.query<{ id: string }>(
+    `SELECT id
+     FROM cash_accounts
+     WHERE business_id = $1 AND id = ANY($2::uuid[]) AND branch_id = $3
+     FOR SHARE`,
+    [businessId, [row.fromAccountId, row.toAccountId], branchId],
+  );
+  if (accountBranches.rowCount !== 2) {
+    throw new LedgerRuleError(
+      403,
+      "cash_transfer_branch_mismatch",
+      "The transfer accounts are not both assigned to this branch.",
+    );
   }
   const sourceBalance = await accountBalance(client, businessId, row.fromAccountId);
   if (sourceBalance === null || amount > sourceBalance) {
