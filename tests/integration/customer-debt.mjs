@@ -19,6 +19,7 @@ const [
   { GET: getDebts },
   { POST: postPayment },
   { GET: getStatement },
+  { GET: getPaymentOptions },
 ] = await Promise.all([
   import("../../src/lib/server/db/pool.ts"),
   import("../../src/lib/server/db/transaction.ts"),
@@ -31,11 +32,13 @@ const [
   import("../../src/app/api/customer-debt/route.ts"),
   import("../../src/app/api/customer-debt/[debtId]/payment/route.ts"),
   import("../../src/app/api/customers/[customerId]/statement/route.ts"),
+  import("../../src/app/api/customer-debt/payment-options/route.ts"),
 ]);
 
 test("customer statements reconcile sale payments and later repayments", async () => {
   const pool = getDatabasePool();
   const unique = String(Date.now());
+  const date = new Date().toISOString().slice(0, 10);
   const businessIds = [];
   const sessionHashes = [];
   const cookieName = authSessionCookieName();
@@ -46,6 +49,9 @@ test("customer statements reconcile sale payments and later repayments", async (
   let secondaryCustomerId;
   let debtId;
   let secondaryDebtId;
+  let cashAccountId;
+  let mtnAccountId;
+  let inactiveBankAccountId;
   let adminToken;
   let managerToken;
 
@@ -82,12 +88,35 @@ test("customer statements reconcile sale payments and later repayments", async (
          RETURNING id`,
         [business.id, branchId],
       );
+      cashAccountId = cashAccount.rows[0].id;
       await client.query(
         `INSERT INTO cash_account_openings
            (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
          VALUES ($1, $2, 20000, $3, $3)`,
-        [business.id, cashAccount.rows[0].id, admin.id],
+        [business.id, cashAccountId, admin.id],
       );
+      const mtnAccount = await client.query(
+        `INSERT INTO cash_accounts (business_id, branch_id, account_type, name)
+         VALUES ($1, $2, 'mtn_wallet', 'Debt MTN wallet')
+         RETURNING id`,
+        [business.id, branchId],
+      );
+      mtnAccountId = mtnAccount.rows[0].id;
+      const inactiveBankAccount = await client.query(
+        `INSERT INTO cash_accounts (business_id, branch_id, account_type, name, is_active)
+         VALUES ($1, $2, 'bank', 'Inactive debt bank', FALSE)
+         RETURNING id`,
+        [business.id, branchId],
+      );
+      inactiveBankAccountId = inactiveBankAccount.rows[0].id;
+      for (const accountId of [mtnAccountId, inactiveBankAccountId]) {
+        await client.query(
+          `INSERT INTO cash_account_openings
+             (business_id, account_id, opening_amount, entered_by_user_id, authorized_by_user_id)
+           VALUES ($1, $2, 0, $3, $3)`,
+          [business.id, accountId, admin.id],
+        );
+      }
       const manager = await createManagerUser(client, {
         businessId: business.id,
         branchId: branch.id,
@@ -201,26 +230,62 @@ test("customer statements reconcile sale payments and later repayments", async (
     );
     assert.equal(forbiddenBranchDebts.status, 403);
 
+    const paymentOptionsResponse = await getPaymentOptions(
+      request(`/api/customer-debt/payment-options?branchId=${branchId}`, managerToken),
+    );
+    assert.equal(paymentOptionsResponse.status, 200);
+    const paymentOptions = await paymentOptionsResponse.json();
+    assert.deepEqual(
+      paymentOptions.accounts.map((account) => account.id).sort(),
+      [cashAccountId, mtnAccountId].sort(),
+    );
+
     const crossBranchStatement = await getStatement(
       request(`/api/customers/${secondaryCustomerId}/statement?branchId=${secondaryBranchId}`, managerToken),
       { params: Promise.resolve({ customerId: secondaryCustomerId }) },
     );
     assert.equal(crossBranchStatement.status, 403);
 
+    const inactiveAccountPayment = await postPayment(
+      request(`/api/customer-debt/${debtId}/payment`, managerToken, {
+        method: "POST",
+        body: JSON.stringify({
+          branchId,
+          paymentMethod: "bank_transfer",
+          amount: 1000,
+          cashAccountId: inactiveBankAccountId,
+        }),
+      }),
+      { params: Promise.resolve({ debtId }) },
+    );
+    assert.equal(inactiveAccountPayment.status, 404);
+
     const repay = await postPayment(
       request(`/api/customer-debt/${debtId}/payment`, managerToken, {
         method: "POST",
-        body: JSON.stringify({ branchId, paymentMethod: "mtn_mobile_money", amount: 6000 }),
+        body: JSON.stringify({
+          branchId,
+          paymentMethod: "mtn_mobile_money",
+          amount: 6000,
+          cashAccountId: mtnAccountId,
+        }),
       }),
       { params: Promise.resolve({ debtId }) },
     );
     assert.equal(repay.status, 201);
-    assert.equal((await repay.json()).payment.balance_due, 8000);
+    const repaymentBody = await repay.json();
+    assert.equal(repaymentBody.payment.balance_due, 8000);
+    assert.equal(repaymentBody.payment.cash_account_id, mtnAccountId);
 
     const overpay = await postPayment(
       request(`/api/customer-debt/${debtId}/payment`, adminToken, {
         method: "POST",
-        body: JSON.stringify({ branchId, paymentMethod: "cash", amount: 8001 }),
+        body: JSON.stringify({
+          branchId,
+          paymentMethod: "cash",
+          amount: 8001,
+          cashAccountId,
+        }),
       }),
       { params: Promise.resolve({ debtId }) },
     );
@@ -236,6 +301,40 @@ test("customer statements reconcile sale payments and later repayments", async (
     assert.equal(body.total_payments, 16000);
     assert.equal(body.outstanding_balance, 8000);
     assert.equal(body.entries.some((entry) => entry.entry_type === "repayment"), true);
+
+    const { calculateDailyReport, calculateBalanceSheet } =
+      await import("../../src/lib/server/repositories/reports.ts");
+    const dailyReport = await calculateDailyReport(
+      pool,
+      businessIds[0],
+      branchId,
+      date,
+      date,
+    );
+    assert.equal(dailyReport.customerRepayments, 6000);
+    assert.equal(dailyReport.cashInflow, 16000);
+    assert.equal(dailyReport.calculatedPhysicalCash, 36000);
+
+    const balanceSheet = await calculateBalanceSheet(
+      pool,
+      businessIds[0],
+      branchId,
+      date,
+    );
+    assert.equal(balanceSheet.cashAndBank, 36000);
+    assert.equal(balanceSheet.accountsReceivable, 8000);
+
+    const repaymentMovement = await pool.query(
+      `SELECT account_id, direction, amount::text AS amount
+       FROM cash_movements
+       WHERE business_id = $1 AND source_id = $2
+         AND source_type = 'customer_debt_payment'`,
+      [businessIds[0], repaymentBody.payment.id],
+    );
+    assert.equal(repaymentMovement.rowCount, 1);
+    assert.equal(repaymentMovement.rows[0].account_id, mtnAccountId);
+    assert.equal(repaymentMovement.rows[0].direction, "in");
+    assert.equal(repaymentMovement.rows[0].amount, "6000");
   } finally {
     if (sessionHashes.length) {
       await pool.query("DELETE FROM auth_sessions WHERE token_hash = ANY($1::bytea[])", [sessionHashes]);

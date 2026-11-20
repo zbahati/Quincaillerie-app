@@ -3,6 +3,7 @@ import "server-only";
 import type { Pool, PoolClient } from "pg";
 
 import type { CustomerDebtPaymentInput } from "@/lib/server/schemas/customer-debt";
+import { lockOpenedCashAccountForPayment } from "./ledger";
 
 export type CustomerDebtExecutor = Pool | PoolClient;
 
@@ -123,13 +124,16 @@ export async function recordCustomerDebtPayment(
   debtId: string,
   branchId: string,
   input: CustomerDebtPaymentInput,
-): Promise<{ paymentId: string; customerName: string; balanceDue: number }> {
+  userId: string,
+): Promise<{ paymentId: string; customerName: string; balanceDue: number; cashAccountId: string }> {
   const debt = await client.query<{
     id: string;
     customerName: string;
+    transactionNumber: string;
     originalAmount: string;
   }>(
     `SELECT d.id, c.name AS "customerName",
+            s.transaction_number AS "transactionNumber",
             LEAST(d.original_amount, GREATEST(
               s.total - COALESCE((
                 SELECT SUM(sp.amount)
@@ -160,17 +164,45 @@ export async function recordCustomerDebtPayment(
   if (input.amount > balanceDue) {
     throw new CustomerDebtRuleError(400, "repayment_exceeds_balance", "Repayment cannot exceed the outstanding balance.");
   }
+  await lockOpenedCashAccountForPayment(
+    client,
+    businessId,
+    branchId,
+    input.cashAccountId,
+    input.paymentMethod,
+  );
   const payment = await client.query<{ id: string }>(
     `INSERT INTO customer_debt_payments
-       (business_id, debt_id, payment_method, amount)
-     VALUES ($1, $2, $3, $4)
+       (business_id, debt_id, payment_method, amount, cash_account_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
-    [businessId, debtId, input.paymentMethod, input.amount],
+    [businessId, debtId, input.paymentMethod, input.amount, input.cashAccountId],
   );
+  const paymentId = payment.rows[0]?.id;
+  if (!paymentId) throw new Error("PostgreSQL did not return the customer debt payment.");
+  const movement = await client.query(
+    `INSERT INTO cash_movements
+       (business_id, account_id, movement_type, direction, amount, source_type,
+        source_id, recorded_at, responsible_user_id, description)
+     SELECT p.business_id, p.cash_account_id, 'customer_repayment', 'in',
+            p.amount, 'customer_debt_payment', p.id, p.created_at, $3,
+            'Customer repayment for sale ' || s.transaction_number
+     FROM customer_debt_payments p
+     JOIN customer_debts d
+       ON d.business_id = p.business_id AND d.id = p.debt_id
+     JOIN sales s
+       ON s.business_id = d.business_id AND s.id = d.sale_id
+     WHERE p.business_id = $1 AND p.id = $2`,
+    [businessId, paymentId, userId],
+  );
+  if (movement.rowCount !== 1) {
+    throw new Error("PostgreSQL did not record the customer repayment in its cash account.");
+  }
   return {
-    paymentId: payment.rows[0].id,
+    paymentId,
     customerName: debt.rows[0].customerName,
     balanceDue: balanceDue - input.amount,
+    cashAccountId: input.cashAccountId,
   };
 }
 

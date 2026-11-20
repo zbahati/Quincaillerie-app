@@ -26,7 +26,7 @@ test("income statement derives COGS and balance sheet derives branch assets and 
     import("../../src/lib/server/auth/crypto.ts"),
     import("../../src/app/api/reports/balance-sheet/route.ts"),
   ]);
-  const { calculateIncomeStatement, calculateBalanceSheet } =
+  const { calculateDailyReport, calculateIncomeStatement, calculateBalanceSheet } =
     await import("../../src/lib/server/repositories/reports.ts");
   const pool = getDatabasePool();
   const unique = String(Date.now());
@@ -192,11 +192,27 @@ test("income statement derives COGS and balance sheet derives branch assets and 
          RETURNING id`,
         [businessId, customer.rows[0].id, sale.rows[0].id],
       );
-      await client.query(
+      const debtPayment = await client.query(
         `INSERT INTO customer_debt_payments
-           (business_id, debt_id, payment_method, amount)
-         VALUES ($1, $2, 'cash', 15000)`,
-        [businessId, debt.rows[0].id],
+           (business_id, debt_id, payment_method, amount, cash_account_id)
+         VALUES ($1, $2, 'cash', 8000, $3)
+         RETURNING id`,
+        [businessId, debt.rows[0].id, accountId],
+      );
+      await client.query(
+        `INSERT INTO cash_movements
+           (business_id, account_id, movement_type, direction, amount, source_type,
+            source_id, recorded_at, responsible_user_id, description)
+         SELECT $1, p.cash_account_id, 'customer_repayment', 'in', p.amount,
+                'customer_debt_payment', p.id, p.created_at, $3,
+                'Customer repayment for sale ' || s.transaction_number
+         FROM customer_debt_payments p
+         JOIN customer_debts d
+           ON d.business_id = p.business_id AND d.id = p.debt_id
+         JOIN sales s
+           ON s.business_id = d.business_id AND s.id = d.sale_id
+         WHERE p.business_id = $1 AND p.id = $2`,
+        [businessId, debtPayment.rows[0].id, admin.id],
       );
       const supplierPayment = await client.query(
         `INSERT INTO purchase_payments
@@ -222,14 +238,20 @@ test("income statement derives COGS and balance sheet derives branch assets and 
     assert.equal(income.expensesTotal, 5000);
     assert.equal(income.operatingResult, 3000);
 
+    const daily = await calculateDailyReport(pool, businessId, branchId, date, date);
+    assert.equal(daily.customerRepayments, 8000);
+    assert.equal(daily.cashInflow, 28000);
+    assert.equal(daily.cashOutflow, 4000);
+    assert.equal(daily.calculatedPhysicalCash, 24000);
+
     const balance = await calculateBalanceSheet(pool, businessId, branchId, date);
     assert.equal(balance.inventory, 85000);
-    assert.equal(balance.accountsReceivable, 0);
-    assert.equal(balance.cashAndBank, 16000);
+    assert.equal(balance.accountsReceivable, 6000);
+    assert.equal(balance.cashAndBank, 24000);
     assert.equal(balance.accountsPayable, 26000);
     assert.equal(balance.retainedEarnings, 3000);
-    assert.equal(balance.totalAssets, 101000);
-    assert.equal(balance.ownerEquity, 72000);
+    assert.equal(balance.totalAssets, 115000);
+    assert.equal(balance.ownerEquity, 86000);
     assert.equal(balance.totalLiabilitiesAndEquity, balance.totalAssets);
     for (const amount of [
       balance.inventory,
@@ -249,12 +271,14 @@ test("income statement derives COGS and balance sheet derives branch assets and 
       { headers: { Cookie: `${authSessionCookieName()}=${sessionToken}` } },
     ));
     assert.equal(apiResponse.status, 200);
-    assert.equal((await apiResponse.json()).accounts_receivable, 0);
+    const balanceSheetResponse = await apiResponse.json();
+    assert.equal(balanceSheetResponse.accounts_receivable, 6000);
+    assert.equal(balanceSheetResponse.cash_and_bank, 24000);
 
     await pool.query(
       `INSERT INTO cash_movements
          (business_id, account_id, movement_type, direction, amount, source_type)
-         VALUES ($1, $2, 'other_payment', 'out', 17000, 'other')`,
+         VALUES ($1, $2, 'other_payment', 'out', 25000, 'other')`,
       [businessId, accountId],
     );
     await assert.rejects(

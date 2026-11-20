@@ -10,6 +10,7 @@ export const customerDebtPaymentSchema = z.object({
   branchId: z.string().uuid(),
   paymentMethod: z.enum(["cash", "mtn_mobile_money", "airtel_money", "bank_transfer"]),
   amount: z.number().int().min(1).refine(Number.isSafeInteger),
+  cashAccountId: z.string().uuid(),
 });
 
 export type CustomerDebtPaymentInput = z.infer<typeof customerDebtPaymentSchema>;

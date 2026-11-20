@@ -15,6 +15,10 @@ import {
   recordCustomerDebtPayment,
   CustomerDebtRuleError,
 } from "../repositories/customer-debt";
+import {
+  LedgerRuleError,
+  listOpenedCashAccountsForBranch,
+} from "../repositories/ledger";
 
 async function resolveCustomerDebtBranch(
   context: AuthenticatedContext,
@@ -46,6 +50,19 @@ export async function listBusinessCustomerDebts(
   return listCustomerDebts(getDatabasePool(), context.businessId, branchId);
 }
 
+export async function listBusinessCustomerPaymentAccounts(
+  context: AuthenticatedContext,
+  requestedBranchId?: string,
+) {
+  requirePermission(context, "customer_payments.manage");
+  const branchId = await resolveCustomerDebtBranch(context, requestedBranchId);
+  return listOpenedCashAccountsForBranch(
+    getDatabasePool(),
+    context.businessId,
+    branchId,
+  );
+}
+
 export async function getBusinessCustomerStatement(
   context: AuthenticatedContext,
   customerId: string,
@@ -75,6 +92,7 @@ export async function recordBusinessCustomerDebtPayment(
         debtId,
         branchId,
         input,
+        context.userId,
       );
       await recordAuditLog(client, {
         businessId: context.businessId,
@@ -86,6 +104,7 @@ export async function recordBusinessCustomerDebtPayment(
           debt_id: debtId,
           payment_method: input.paymentMethod,
           amount: input.amount,
+          cash_account_id: payment.cashAccountId,
           balance_due: payment.balanceDue,
           branch_id: branchId,
         },
@@ -94,6 +113,9 @@ export async function recordBusinessCustomerDebtPayment(
     });
   } catch (cause) {
     if (cause instanceof CustomerDebtRuleError) {
+      throw new AuthServiceError(cause.status, cause.code, cause.message);
+    }
+    if (cause instanceof LedgerRuleError) {
       throw new AuthServiceError(cause.status, cause.code, cause.message);
     }
     throw cause;

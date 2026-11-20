@@ -3,7 +3,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { LoaderCircle, Wallet } from "lucide-react";
 
-import { customerDebtApi, type CustomerDebt } from "@/lib/api/customer-debt-api";
+import {
+  customerDebtApi,
+  type CustomerDebt,
+  type CustomerDebtPaymentAccount,
+} from "@/lib/api/customer-debt-api";
 import { inventoryApi, type InventoryBranch } from "@/lib/api/inventory-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +35,18 @@ function formatMoney(value: number): string {
   return `${new Intl.NumberFormat("en-RW").format(Number(whole))}${fraction === 0n ? "" : `.${fraction.toString().padStart(2, "0")}`} RWF`;
 }
 
+function accountsForPaymentMethod(
+  accounts: CustomerDebtPaymentAccount[],
+  method: PaymentMethod,
+): CustomerDebtPaymentAccount[] {
+  const accountType =
+    method === "cash" ? "cash_drawer"
+      : method === "bank_transfer" ? "bank"
+        : method === "mtn_mobile_money" ? "mtn_wallet"
+          : "airtel_wallet";
+  return accounts.filter((account) => account.account_type === accountType);
+}
+
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -42,7 +58,9 @@ export function PaymentsPage() {
   const [branches, setBranches] = useState<InventoryBranch[]>([]);
   const [branchScope, setBranchScope] = useState(user.role === "manager" ? user.branch_id ?? "" : "");
   const [debts, setDebts] = useState<CustomerDebt[]>([]);
+  const [paymentAccounts, setPaymentAccounts] = useState<CustomerDebtPaymentAccount[]>([]);
   const [selectedDebtId, setSelectedDebtId] = useState("");
+  const [cashAccountId, setCashAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [isLoading, setIsLoading] = useState(user.role !== "manager" || Boolean(user.branch_id));
@@ -76,10 +94,14 @@ export function PaymentsPage() {
       return;
     }
     let active = true;
-    customerDebtApi.list(branchScope)
-      .then((result) => {
+    Promise.all([
+      customerDebtApi.list(branchScope),
+      canManage ? customerDebtApi.paymentAccounts(branchScope) : Promise.resolve([]),
+    ])
+      .then(([result, accounts]) => {
         if (!active) return;
         setDebts(result);
+        setPaymentAccounts(accounts);
         setSelectedDebtId((current) =>
           result.some((debt) => debt.id === current && debt.balance_due > 0)
             ? current
@@ -93,10 +115,11 @@ export function PaymentsPage() {
         if (active) setIsLoading(false);
       });
     return () => { active = false; };
-  }, [canRead, branchScope]);
+  }, [canManage, canRead, branchScope]);
 
   const selectedDebt = debts.find((debt) => debt.id === selectedDebtId);
   const outstandingTotal = debts.reduce((sum, debt) => sum + debt.balance_due, 0);
+  const availablePaymentAccounts = accountsForPaymentMethod(paymentAccounts, paymentMethod);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -110,6 +133,11 @@ export function PaymentsPage() {
       setError("Repayment cannot exceed the selected outstanding balance.");
       return;
     }
+    const selectedAccount = availablePaymentAccounts.find((account) => account.id === cashAccountId);
+    if (!selectedAccount) {
+      setError("Select an active, opened account matching the payment method.");
+      return;
+    }
     setError(null);
     setNotice(null);
     setIsSaving(true);
@@ -118,6 +146,7 @@ export function PaymentsPage() {
         branchId: selectedDebt.branch_id,
         paymentMethod,
         amount: parsedAmount,
+        cashAccountId: selectedAccount.id,
       });
       setDebts((current) => current.map((debt) =>
         debt.id === selectedDebt.id
@@ -129,7 +158,7 @@ export function PaymentsPage() {
           : debt,
       ));
       setAmount("");
-      setNotice(`Recorded ${formatMoney(payment.amount)} repayment for ${payment.customer_name}.`);
+      setNotice(`Recorded ${formatMoney(payment.amount)} repayment for ${payment.customer_name} into ${selectedAccount.name}.`);
     } catch (cause) {
       setError(`Could not record repayment. ${errorText(cause)}`);
     } finally {
@@ -158,9 +187,12 @@ export function PaymentsPage() {
             id="debt-branch"
             value={branchScope}
             onChange={(event) => {
-              setBranchScope(event.target.value);
+              const nextBranchId = event.target.value;
+              setBranchScope(nextBranchId);
               setDebts([]);
-              setIsLoading(true);
+              setPaymentAccounts([]);
+              setCashAccountId("");
+              setIsLoading(Boolean(nextBranchId));
               setSelectedDebtId("");
               setError(null);
             }}
@@ -188,7 +220,14 @@ export function PaymentsPage() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="debt-payment-method">Payment method</Label>
-                    <SelectField id="debt-payment-method" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+                    <SelectField
+                      id="debt-payment-method"
+                      value={paymentMethod}
+                      onChange={(event) => {
+                        setPaymentMethod(event.target.value as PaymentMethod);
+                        setCashAccountId("");
+                      }}
+                    >
                       <option value="cash">Cash</option>
                       <option value="mtn_mobile_money">MTN Mobile Money</option>
                       <option value="airtel_money">Airtel Money</option>
@@ -196,11 +235,42 @@ export function PaymentsPage() {
                     </SelectField>
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="debt-payment-account">Deposit to account</Label>
+                    <SelectField
+                      id="debt-payment-account"
+                      value={cashAccountId}
+                      disabled={isLoading || availablePaymentAccounts.length === 0}
+                      onChange={(event) => setCashAccountId(event.target.value)}
+                    >
+                      <option value="">Select an active, opened account</option>
+                      {availablePaymentAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>{account.name}</option>
+                      ))}
+                    </SelectField>
+                    {!isLoading && availablePaymentAccounts.length === 0 ? (
+                      <p className="text-xs text-amber-700">
+                        Ask the Admin to activate and open an account matching this payment method.
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="debt-payment-amount">Repayment amount (RWF)</Label>
                     <Input id="debt-payment-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" />
                   </div>
                   {selectedDebt ? <p className="text-sm text-muted-foreground">Outstanding: {formatMoney(selectedDebt.balance_due)}</p> : null}
-                  <Button type="submit" disabled={isSaving || !selectedDebt || !amount.trim()}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Wallet />}{isSaving ? "Recording..." : "Record repayment"}</Button>
+                  <Button
+                    type="submit"
+                    disabled={
+                      isSaving ||
+                      isLoading ||
+                      !selectedDebt ||
+                      !amount.trim() ||
+                      !availablePaymentAccounts.some((account) => account.id === cashAccountId)
+                    }
+                  >
+                    {isSaving ? <LoaderCircle className="animate-spin" /> : <Wallet />}
+                    {isSaving ? "Recording..." : "Record repayment"}
+                  </Button>
                 </form>
               )}
             </CardContent>

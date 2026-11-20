@@ -25,6 +25,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         payment_method: input.paymentMethod,
         amount: input.amount,
         balance_due: payment.balanceDue,
+        cash_account_id: payment.cashAccountId,
       },
     }, 201);
   } catch (cause) {
