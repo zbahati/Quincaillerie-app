@@ -43,6 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [bootstrapSecret, setBootstrapSecret] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [isRecovery, setIsRecovery] = useState(false);
@@ -122,10 +123,32 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (isPendingVerification) {
       setIsSaving(true);
       try {
-        await authApi.requestAdminEmailVerification({ businessId, email: email.trim() });
-        setSuccess("If an unverified Admin account matches this business and email, a verification link will be sent.");
+        if (bootstrapSecret.trim()) {
+          await authApi.requestAdminEmailVerification({
+            businessId,
+            email: email.trim(),
+            setupSecret: bootstrapSecret,
+          });
+          setBusinesses((current) =>
+            current.map((business) =>
+              business.id === businessId
+                ? { ...business, requires_admin_verification: false }
+                : business,
+            ),
+          );
+          setPendingBusinessId(null);
+          setBootstrapSecret("");
+          setSuccess("Admin verification is complete. Sign in with your Admin username and password.");
+        } else {
+          await authApi.requestAdminEmailVerification({ businessId, email: email.trim() });
+          setSuccess("If an unverified Admin account matches this business and email, a verification link will be sent.");
+        }
       } catch (cause) {
-        setError(`Could not request an email verification link. ${errorText(cause)}`);
+        setError(
+          bootstrapSecret.trim()
+            ? `Could not verify the Admin setup code. ${errorText(cause)}`
+            : `Could not request an email verification link. ${errorText(cause)}`,
+        );
       } finally {
         setIsSaving(false);
       }
@@ -172,7 +195,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         setSuccess(
           result.email_delivery === "sent"
             ? "Admin account created. Check your email and verify the address before signing in."
-            : "Admin account created, but the verification email could not be delivered. Check the email configuration or request another link.",
+            : "Admin account created, but the verification email could not be delivered. Use the temporary setup code below or configure email delivery.",
         );
         setPassword("");
         setPasswordConfirmation("");
@@ -272,7 +295,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 {isRecovery
                   ? "Enter the Admin email address. If it matches this business, reset instructions will be sent by email."
                   : isPendingVerification
-                    ? "Verify the Admin email address before signing in. Check your inbox or request another verification link."
+                    ? "Verify the Admin email before signing in. Check your inbox, request another link, or use the temporary setup code."
                     : isBootstrap
                       ? "Create the first Admin account. Sign-in and initial setup require an internet connection."
                       : "Business Admins and active Managers can sign in with their business username and password."}
@@ -312,6 +335,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                     onChange={(event) => {
                       const selectedId = event.target.value;
                       setBusinessId(selectedId);
+                      setBootstrapSecret("");
                       const selected = businesses.find((business) => business.id === selectedId);
                       if (selected?.requires_admin_setup) {
                         setUsername("admin");
@@ -363,6 +387,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
                   </>
                 )}
               </div>
+              {isPendingVerification ? (
+                <div className="space-y-2">
+                  <Label htmlFor="auth-bootstrap-secret">Temporary Admin setup code</Label>
+                  <Input
+                    id="auth-bootstrap-secret"
+                    type="password"
+                    autoComplete="off"
+                    maxLength={256}
+                    value={bootstrapSecret}
+                    onChange={(event) => setBootstrapSecret(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use this only for the initial Admin setup. Remove the code from Render after verification.
+                  </p>
+                </div>
+              ) : null}
               {!isRecovery && isBootstrap ? (
                 <div className="space-y-2">
                   <Label htmlFor="auth-username">Admin username</Label>
@@ -399,7 +439,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
                   : isRecovery
                     ? "Send recovery email"
                     : isPendingVerification
-                      ? "Resend verification email"
+                      ? bootstrapSecret.trim()
+                        ? "Verify with setup code"
+                        : "Resend verification email"
                       : isBootstrap
                         ? "Create Admin account"
                         : "Sign in"}

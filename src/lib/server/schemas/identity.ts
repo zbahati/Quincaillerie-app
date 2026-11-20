@@ -116,6 +116,7 @@ export const adminEmailVerificationSchema = z.object({
 export const adminEmailVerificationRequestSchema = z.object({
   businessId: uuidSchema,
   email: emailSchema,
+  setupSecret: z.string().min(32).max(256).optional(),
 });
 
 export const branchDetailsSchema = z.object({
@@ -203,6 +204,7 @@ export type AdminBootstrapInput = z.infer<typeof adminBootstrapSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;
 export type AdminPasswordResetRequestInput = z.infer<typeof adminPasswordResetRequestSchema>;
 export type AdminPasswordResetCompletionInput = z.infer<typeof adminPasswordResetCompletionSchema>;
+export type AdminEmailVerificationRequestInput = z.infer<typeof adminEmailVerificationRequestSchema>;
 export type BusinessDetailsInput = z.infer<typeof businessDetailsSchema>;
 export type BranchDetailsInput = z.infer<typeof branchDetailsSchema>;
 export type BranchUpdateInput = z.infer<typeof branchUpdateSchema>;

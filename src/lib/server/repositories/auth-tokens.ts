@@ -130,6 +130,39 @@ export async function verifyAdminEmail(
   return result.rows[0] ?? null;
 }
 
+export async function verifyUnverifiedAdminWithSetupSecret(
+  client: PoolClient,
+  businessId: string,
+  email: string,
+): Promise<AdminIdentityReference | null> {
+  const result = await client.query<AdminIdentityReference>(
+    `UPDATE users AS user_row
+     SET email_verified_at = now(), updated_at = now()
+     FROM businesses AS business
+     WHERE user_row.business_id = $1
+       AND user_row.email = $2
+       AND user_row.role = 'admin'
+       AND user_row.email_verified_at IS NULL
+       AND user_row.is_active = TRUE
+       AND business.id = user_row.business_id
+       AND business.is_active = TRUE
+     RETURNING user_row.id AS "userId", user_row.business_id AS "businessId"`,
+    [businessId, email],
+  );
+  const identity = result.rows[0] ?? null;
+  if (!identity) {
+    return null;
+  }
+
+  await client.query(
+    `UPDATE admin_email_verification_tokens
+     SET consumed_at = now()
+     WHERE business_id = $1 AND user_id = $2 AND consumed_at IS NULL`,
+    [identity.businessId, identity.userId],
+  );
+  return identity;
+}
+
 export async function createAdminPasswordResetToken(
   client: PoolClient,
   input: {

@@ -350,6 +350,8 @@ Use a Render Docker Web Service with Neon PostgreSQL for staging. Configure HTTP
 
 The selected initial configuration is the Render free web-service plan and Neon free plan. `render.yaml` defines the Docker service in Ohio to match the Neon project region and deploys on each commit to the branch selected when creating the Blueprint. `DATABASE_URL`, `WEB_BASE_URL`, `RESEND_API_KEY`, and `RESEND_FROM_EMAIL` are entered as unsynchronized environment values rather than committed. The Docker image applies pending migrations before launching Next.js, including on Render's free plan, which does not support pre-deploy commands; the runner uses a PostgreSQL advisory lock and checksum tracking. Use the Neon pooled SSL connection string and set `WEB_BASE_URL` to the exact deployed HTTPS origin. Free services can sleep and cold-start, so this is for staging/evaluation, not production reliability. No external resources have been created.
 
+For the temporary no-email first-Admin recovery, set a randomly generated `ADMIN_BOOTSTRAP_SECRET` of at least 32 characters in Render, use it only to verify the existing pending Admin, then remove it from Render. The code verifies the secret in constant time, rate-limits attempts, consumes outstanding email-verification tokens, and audits the verification. This does not disable email verification for other flows; configure Resend before relying on verification or recovery emails for future accounts.
+
 ## 6. Non-negotiable business and safety rules
 
 1. Inspect the current implementation before changing a workflow; existing behavior and migrations are the source of truth unless the user approves a business-rule change.

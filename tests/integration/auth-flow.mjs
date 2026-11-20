@@ -33,6 +33,7 @@ const [
   { AuthServiceError },
   { POST: loginRoute },
   { POST: logoutRoute },
+  { POST: verificationRequestRoute },
 ] = await Promise.all([
   import("../../src/lib/server/db/pool.ts"),
   import("../../src/lib/server/db/transaction.ts"),
@@ -46,6 +47,7 @@ const [
   import("../../src/lib/server/auth/errors.ts"),
   import("../../src/app/api/auth/login/route.ts"),
   import("../../src/app/api/auth/logout/route.ts"),
+  import("../../src/app/api/auth/verification/request/route.ts"),
 ]);
 
 test("Admin email verification, sign-in, Manager scope and password reset work end to end", async () => {
@@ -54,6 +56,8 @@ test("Admin email verification, sign-in, Manager scope and password reset work e
   const outgoingEmails = [];
   const rateLimitKeys = [];
   let businessId;
+  let setupBusinessId;
+  const originalBootstrapSecret = process.env.ADMIN_BOOTSTRAP_SECRET;
   const trackRateLimitKey = (scope, identity) => {
     rateLimitKeys.push(hashOpaqueToken(`${scope}:${identity}`));
   };
@@ -241,14 +245,98 @@ test("Admin email verification, sign-in, Manager scope and password reset work e
       completeAdminPasswordReset({ token: resetToken, newPassword: initialPassword }),
       (error) => error instanceof AuthServiceError && error.code === "invalid_reset_token",
     );
+
+    const setupNow = Date.now();
+    const setupEmail = `setup-admin-${setupNow}@example.test`;
+    const setupUsername = `setup.${String(setupNow).slice(-8)}`;
+    const setupPassword = "Setup-admin-password-2026";
+    const setupBusiness = await withTransaction((client) =>
+      createBusiness(client, { name: `Setup secret test ${setupNow}` }),
+    );
+    setupBusinessId = setupBusiness.id;
+    trackRateLimitKey("admin-bootstrap-global", "all");
+    trackRateLimitKey("admin-bootstrap", `${setupBusinessId}:${setupEmail}`);
+    const setupBootstrap = await bootstrapAdmin(
+      adminBootstrapSchema.parse({
+        businessId: setupBusinessId,
+        businessName: null,
+        username: setupUsername,
+        fullName: "Setup Secret Admin",
+        email: setupEmail,
+        password: setupPassword,
+      }),
+    );
+    assert.equal(setupBootstrap.status, "verification_pending");
+    const setupVerificationMessage = outgoingEmails.at(-1);
+    const setupVerificationToken =
+      setupVerificationMessage?.text.match(/token=([A-Za-z0-9_-]+)/)?.[1];
+    assert.ok(setupVerificationToken);
+    const setupSecret = `temporary-admin-setup-secret-${setupNow}-for-tests`;
+    const verificationRequest = (secret) =>
+      verificationRequestRoute(
+        new NextRequest(`${process.env.WEB_BASE_URL}/api/auth/verification/request`, {
+          method: "POST",
+          headers: {
+            Origin: process.env.WEB_BASE_URL,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            businessId: setupBusinessId,
+            email: setupEmail,
+            setupSecret: secret,
+          }),
+        }),
+      );
+    trackRateLimitKey("admin-setup-secret-global", "all");
+    trackRateLimitKey("admin-setup-secret", `${setupBusinessId}:${setupEmail}`);
+    delete process.env.ADMIN_BOOTSTRAP_SECRET;
+    assert.equal((await verificationRequest("x".repeat(32))).status, 503);
+    process.env.ADMIN_BOOTSTRAP_SECRET = setupSecret;
+    assert.equal((await verificationRequest("x".repeat(32))).status, 403);
+    const setupVerificationResponse = await verificationRequest(setupSecret);
+    assert.equal(setupVerificationResponse.status, 200);
+    assert.deepEqual(await setupVerificationResponse.json(), { status: "verified" });
+    const setupVerifiedBusiness = (await listBusinesses()).find(
+      (business) => business.id === setupBusinessId,
+    );
+    assert.equal(setupVerifiedBusiness?.requires_admin_verification, false);
+    const setupAuditEvent = await pool.query(
+      `SELECT 1
+       FROM audit_logs
+       WHERE business_id = $1
+         AND action = 'auth.admin_email_verified_with_setup_secret'`,
+      [setupBusinessId],
+    );
+    assert.equal(setupAuditEvent.rowCount, 1);
+    trackRateLimitKey("sign-in-global", "all");
+    trackRateLimitKey("sign-in", `${setupBusinessId}:${setupUsername}`);
+    const setupSignIn = await signIn({
+      businessId: setupBusinessId,
+      username: setupUsername,
+      password: setupPassword,
+    });
+    assert.equal(setupSignIn.session.user.role, "admin");
+    trackRateLimitKey("admin-email-verify-global", "all");
+    trackRateLimitKey("admin-email-verify", setupVerificationToken);
+    await assert.rejects(
+      verifyAdminEmail(setupVerificationToken),
+      (error) => error instanceof AuthServiceError && error.code === "invalid_verification_token",
+    );
   } finally {
     globalThis.fetch = originalFetch;
-    if (businessId) {
-      await pool.query("DELETE FROM audit_logs WHERE business_id = $1", [businessId]);
-      await pool.query("DELETE FROM business_manager_permissions WHERE business_id = $1", [businessId]);
-      await pool.query("DELETE FROM users WHERE business_id = $1", [businessId]);
-      await pool.query("DELETE FROM branches WHERE business_id = $1", [businessId]);
-      await pool.query("DELETE FROM businesses WHERE id = $1", [businessId]);
+    if (originalBootstrapSecret === undefined) {
+      delete process.env.ADMIN_BOOTSTRAP_SECRET;
+    } else {
+      process.env.ADMIN_BOOTSTRAP_SECRET = originalBootstrapSecret;
+    }
+    for (const id of [businessId, setupBusinessId]) {
+      if (id) {
+        await pool.query("DELETE FROM audit_logs WHERE business_id = $1", [id]);
+        await pool.query("DELETE FROM business_manager_permissions WHERE business_id = $1", [id]);
+        await pool.query("DELETE FROM users WHERE business_id = $1", [id]);
+        await pool.query("DELETE FROM branches WHERE business_id = $1", [id]);
+        await pool.query("DELETE FROM businesses WHERE id = $1", [id]);
+      }
     }
     for (const keyHash of rateLimitKeys) {
       await pool.query("DELETE FROM auth_rate_limits WHERE key_hash = $1", [keyHash]);

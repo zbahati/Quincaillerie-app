@@ -1,7 +1,10 @@
 import "server-only";
 
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import type {
   AdminBootstrapInput,
+  AdminEmailVerificationRequestInput,
   AdminPasswordResetCompletionInput,
   AdminPasswordResetRequestInput,
   SignInInput,
@@ -45,6 +48,7 @@ import {
   findUnverifiedAdminByEmail,
   findVerifiedAdminByEmail,
   verifyAdminEmail as consumeVerificationToken,
+  verifyUnverifiedAdminWithSetupSecret,
 } from "../repositories/auth-tokens";
 import { recordAuditLog } from "../repositories/audit-logs";
 import { listPermissionsForUser } from "../repositories/permissions";
@@ -59,6 +63,7 @@ import { seedDefaultManagerPermissions } from "../repositories/manager-permissio
 const EMAIL_VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1_000;
 const PASSWORD_RESET_TOKEN_TTL_MS = 30 * 60 * 1_000;
 const BOOTSTRAP_ADVISORY_LOCK = 7_412_908;
+const ADMIN_BOOTSTRAP_SECRET_MIN_LENGTH = 32;
 
 export interface AdminBootstrapResult {
   status: "verification_pending";
@@ -246,6 +251,60 @@ export async function requestAdminEmailVerification(
   } catch (cause) {
     logEmailDeliveryFailure("admin-verification", cause);
   }
+}
+
+export async function verifyPendingAdminWithSetupSecret(
+  input: AdminEmailVerificationRequestInput & { setupSecret: string },
+): Promise<void> {
+  await enforceAuthRateLimit("admin-setup-secret-global", "all", 20, 15 * 60);
+  await enforceAuthRateLimit(
+    "admin-setup-secret",
+    `${input.businessId}:${input.email}`,
+    5,
+    15 * 60,
+  );
+
+  const configuredSecret = process.env.ADMIN_BOOTSTRAP_SECRET;
+  if (!configuredSecret || configuredSecret.length < ADMIN_BOOTSTRAP_SECRET_MIN_LENGTH) {
+    throw new AuthServiceError(
+      503,
+      "admin_setup_secret_unavailable",
+      "Temporary Admin setup is not configured.",
+    );
+  }
+
+  const expectedDigest = createHash("sha256").update(configuredSecret).digest();
+  const suppliedDigest = createHash("sha256").update(input.setupSecret).digest();
+  if (!timingSafeEqual(expectedDigest, suppliedDigest)) {
+    throw new AuthServiceError(
+      403,
+      "invalid_admin_setup_secret",
+      "The temporary Admin setup code is invalid.",
+    );
+  }
+
+  await withTransaction(async (client) => {
+    const identity = await verifyUnverifiedAdminWithSetupSecret(
+      client,
+      input.businessId,
+      input.email,
+    );
+    if (!identity) {
+      throw new AuthServiceError(
+        404,
+        "unverified_admin_not_found",
+        "No active unverified Admin matches this business and email.",
+      );
+    }
+
+    await recordAuditLog(client, {
+      businessId: identity.businessId,
+      userId: identity.userId,
+      action: "auth.admin_email_verified_with_setup_secret",
+      entityType: "user",
+      entityId: identity.userId,
+    });
+  });
 }
 
 export async function verifyAdminEmail(token: string): Promise<void> {

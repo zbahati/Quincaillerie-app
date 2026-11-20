@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  adminEmailVerificationRequestSchema,
   adminBootstrapSchema,
   managerCreateSchema,
   managerPermissionUpdateSchema,
@@ -48,6 +49,28 @@ test("requires a business name only when bootstrapping a new business", () => {
       bootstrapInput({ businessId, businessName: null }),
     ).success,
     true,
+  );
+});
+
+test("accepts a strong temporary setup secret only for Admin email verification", () => {
+  const request = {
+    businessId,
+    email: "ADMIN@example.com",
+  };
+  assert.equal(adminEmailVerificationRequestSchema.safeParse(request).success, true);
+  assert.equal(
+    adminEmailVerificationRequestSchema.safeParse({
+      ...request,
+      setupSecret: "a".repeat(32),
+    }).success,
+    true,
+  );
+  assert.equal(
+    adminEmailVerificationRequestSchema.safeParse({
+      ...request,
+      setupSecret: "a".repeat(31),
+    }).success,
+    false,
   );
 });
 

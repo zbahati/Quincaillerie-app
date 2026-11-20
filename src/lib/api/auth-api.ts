@@ -43,6 +43,12 @@ export interface AdminPasswordResetRequest {
   email: string;
 }
 
+export interface AdminEmailVerificationRequest {
+  businessId: string;
+  email: string;
+  setupSecret?: string;
+}
+
 export interface AdminPasswordResetCompletion {
   token: string;
   newPassword: string;
@@ -174,7 +180,7 @@ export const authApi = {
     await postJson("/api/auth/password-reset/request", input);
   },
 
-  async requestAdminEmailVerification(input: AdminPasswordResetRequest): Promise<void> {
+  async requestAdminEmailVerification(input: AdminEmailVerificationRequest): Promise<void> {
     await postJson("/api/auth/verification/request", input);
   },
 

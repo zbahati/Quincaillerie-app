@@ -17,3 +17,5 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: ADMIN_BOOTSTRAP_SECRET
+        sync: false
